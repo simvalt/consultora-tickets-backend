@@ -3,6 +3,7 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from sqlalchemy.exc import DataError, IntegrityError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 
 log = logging.getLogger("tickets")
@@ -53,6 +54,17 @@ def install_handlers(app: FastAPI) -> None:
         )
         msg = "El recurso no existe." if exc.status_code == 404 else str(exc.detail)
         return JSONResponse(_body(code, msg), status_code=exc.status_code, headers=getattr(exc, "headers", None))
+
+    @app.exception_handler(IntegrityError)
+    async def _integrity(_: Request, exc: IntegrityError):
+        # Red de seguridad para carreras (p. ej. dos altas simultáneas con el mismo nombre único).
+        log.warning("Violación de integridad: %s", exc.orig)
+        return JSONResponse(_body("conflict", "El registro entra en conflicto con otro existente."), status_code=409)
+
+    @app.exception_handler(DataError)
+    async def _data(_: Request, exc: DataError):
+        log.warning("Dato rechazado por la base de datos: %s", exc.orig)
+        return JSONResponse(_body("invalid_data", "Los datos enviados no son válidos."), status_code=400)
 
     @app.exception_handler(Exception)
     async def _unhandled(_: Request, exc: Exception):

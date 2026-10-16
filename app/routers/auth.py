@@ -4,9 +4,9 @@ from fastapi import APIRouter, Cookie, Depends, Request, Response
 from sqlalchemy import Connection
 
 from app.config import get_settings
-from app.db import get_db
+from app.db import DB
 from app.deps import CurrentUser, get_current_user
-from app.schemas import LoginIn, MeOut, TokenOut
+from app.schemas import ChangePasswordIn, LoginIn, MeOut, TokenOut
 from app.services import auth as service
 
 router = APIRouter(prefix="/auth", tags=["Autenticación"])
@@ -24,7 +24,7 @@ def _set_cookie(response: Response, value: str, expires: datetime) -> None:
 
 
 @router.post("/login", response_model=TokenOut, summary="Iniciar sesión")
-def login(body: LoginIn, request: Request, response: Response, conn: Connection = Depends(get_db)):
+def login(body: LoginIn, request: Request, response: Response, conn: Connection = DB):
     ip = request.client.host if request.client else "unknown"
     # Los intentos fallidos deben contarse aunque la transacción se revierta: ver service.login (límite en memoria).
     payload, refresh, expires = service.login(conn, body.email, body.password, ip)
@@ -35,7 +35,7 @@ def login(body: LoginIn, request: Request, response: Response, conn: Connection 
 
 @router.post("/refresh", response_model=TokenOut, summary="Renovar el access token con la cookie de refresco")
 def refresh(
-    response: Response, conn: Connection = Depends(get_db), refresh_token: str | None = Cookie(default=None)
+    response: Response, conn: Connection = DB, refresh_token: str | None = Cookie(default=None)
 ):
     payload, new_raw, expires = service.refresh(conn, refresh_token)
     _set_cookie(response, new_raw, expires)
@@ -44,11 +44,21 @@ def refresh(
 
 
 @router.post("/logout", status_code=204, summary="Cerrar sesión (revoca el refresh token)")
-def logout(response: Response, conn: Connection = Depends(get_db), refresh_token: str | None = Cookie(default=None)):
+def logout(response: Response, conn: Connection = DB, refresh_token: str | None = Cookie(default=None)):
     service.logout(conn, refresh_token)
     response.delete_cookie(COOKIE, path=COOKIE_PATH)
     response.status_code = 204
     return response
+
+
+@router.post("/change-password", response_model=TokenOut, summary="Cambiar la propia contraseña")
+def change_password(
+    body: ChangePasswordIn, response: Response, user: CurrentUser = Depends(get_current_user), conn: Connection = DB
+):
+    """Exige la contraseña actual. Cierra todas las demás sesiones y devuelve una nueva."""
+    payload, refresh_raw, expires = service.change_own_password(conn, user, body.current_password, body.new_password)
+    _set_cookie(response, refresh_raw, expires)
+    return payload
 
 
 @router.get("/me", response_model=MeOut, summary="Usuario autenticado y sus permisos")

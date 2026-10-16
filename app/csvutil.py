@@ -5,23 +5,34 @@ from datetime import UTC, date, datetime
 
 from fastapi.responses import StreamingResponse
 
-_DANGEROUS = ("=", "+", "-", "@", "\t", "\r")
+_DANGEROUS = "=+-@\t\r"  # primeros caracteres que una hoja de cálculo interpreta como fórmula
+
+
+def _neutralize(text: str) -> str:
+    return "'" + text if text and text[0] in _DANGEROUS else text
 
 
 def safe_cell(value: object) -> str:
-    """Convierte a texto y neutraliza fórmulas de hoja de cálculo (CSV injection)."""
+    """Convierte a texto y neutraliza fórmulas de hoja de cálculo (CSV injection).
+
+    Ruta rápida por tipo exacto: se llama una vez por celda (millones de veces en exportaciones grandes).
+    """
+    kind = type(value)
+    if kind is str:
+        return _neutralize(value)  # type: ignore[arg-type]
     if value is None:
         return ""
-    if isinstance(value, bool):
+    if kind is bool:
         return "Sí" if value else "No"
     if isinstance(value, datetime):
-        return value.astimezone(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+        if value.tzinfo is not None and value.utcoffset():
+            value = value.astimezone(UTC)
+        return value.isoformat(timespec="seconds").replace("+00:00", "Z") + ("" if value.tzinfo else "Z")
     if isinstance(value, date):
         return value.isoformat()
     if isinstance(value, int | float):
         return str(value)
-    text = str(value)
-    return "'" + text if text.startswith(_DANGEROUS) else text
+    return _neutralize(str(value))
 
 
 def csv_stream(headers: list[str], rows: Iterable[list[object]]) -> Iterator[bytes]:

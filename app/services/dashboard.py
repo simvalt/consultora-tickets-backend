@@ -69,27 +69,28 @@ def compute(conn: Connection, f: DashboardFilters) -> dict:
     where, b = _period(f, common, cb)
     w = " AND ".join(where)
 
-    by_status = {
-        s: n for s, n in conn.execute(text(f"SELECT t.status, count(*) FROM tickets t WHERE {w} GROUP BY t.status"), b)
-    }
-    by_priority = {
-        p: n for p, n in conn.execute(text(f"SELECT t.priority, count(*) FROM tickets t WHERE {w} GROUP BY t.priority"), b)
-    }
     open_list = ", ".join(f"'{s}'" for s in wf.OPEN_STATUSES)
-    overdue = conn.execute(
+    # Un solo recorrido para estatus, prioridad, vencidos y tiempo de resolución (antes: cuatro consultas).
+    # Se agrupa por (estatus, prioridad): como mucho 28 filas, que se reducen en Python.
+    by_status: dict[str, int] = {}
+    by_priority: dict[str, int] = {}
+    overdue = 0
+    closed_seconds = 0.0
+    for status, priority, n, n_overdue, seconds in conn.execute(
         text(
-            f"SELECT count(*) FROM tickets t WHERE {w} AND t.due_at IS NOT NULL "
-            f"AND t.due_at < now() AND t.status IN ({open_list})"
+            f"SELECT t.status, t.priority, count(*), "
+            f"count(*) FILTER (WHERE t.due_at < now() AND t.status IN ({open_list})), "
+            f"coalesce(sum(extract(epoch FROM (t.closed_at - t.created_at))) FILTER (WHERE t.status = 'cerrado'), 0) "
+            f"FROM tickets t WHERE {w} GROUP BY t.status, t.priority"
         ),
         b,
-    ).scalar_one()
-    avg_hours = conn.execute(
-        text(
-            f"SELECT avg(extract(epoch FROM (t.closed_at - t.created_at))) / 3600.0 "
-            f"FROM tickets t WHERE {w} AND t.status = 'cerrado'"
-        ),
-        b,
-    ).scalar_one()
+    ):
+        by_status[status] = by_status.get(status, 0) + n
+        by_priority[priority] = by_priority.get(priority, 0) + n
+        overdue += n_overdue
+        closed_seconds += float(seconds)
+    closed_count = by_status.get(wf.CERRADO, 0)
+    avg_hours = closed_seconds / closed_count / 3600.0 if closed_count else None
     by_assignee = conn.execute(
         text(
             f"SELECT t.assignee_id AS id, coalesce(u.full_name, 'Sin responsable') AS label, count(*) AS n "

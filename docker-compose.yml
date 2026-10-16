@@ -10,7 +10,7 @@ name: consultora-tickets
 
 services:
   db:
-    image: postgres:16.4
+    image: postgres:16.15-bookworm
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-tickets}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?define POSTGRES_PASSWORD en .env}
@@ -68,7 +68,11 @@ services:
       COOKIE_SECURE: ${COOKIE_SECURE:-false}
       COOKIE_SAMESITE: ${COOKIE_SAMESITE:-lax}
       CORS_ORIGINS: ${CORS_ORIGINS:-}
-      DOCS_ENABLED: ${DOCS_ENABLED:-true}
+      LOGIN_MAX_ATTEMPTS: ${LOGIN_MAX_ATTEMPTS:-5}
+      LOGIN_MAX_ATTEMPTS_IP: ${LOGIN_MAX_ATTEMPTS_IP:-20}
+      LOGIN_MAX_ATTEMPTS_EMAIL: ${LOGIN_MAX_ATTEMPTS_EMAIL:-10}
+      LOGIN_WINDOW_SECONDS: ${LOGIN_WINDOW_SECONDS:-300}
+      DOCS_ENABLED: ${DOCS_ENABLED:-}
       FORWARDED_ALLOW_IPS: ${FORWARDED_ALLOW_IPS:-*}
     ports:
       - "127.0.0.1:${BACKEND_PORT:-8000}:8000"

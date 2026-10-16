@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import Connection
 
 from app.csvutil import csv_response
-from app.db import get_db, get_engine
+from app.db import DB, get_engine
 from app.deps import CurrentUser, require
 from app.errors import not_found
 from app.permissions import Level
@@ -37,7 +37,7 @@ def list_users(
     f: UserQuery = Depends(),
     p: PageParams = Depends(page_params),
     _: CurrentUser = Depends(require("users", Level.READ)),
-    conn: Connection = Depends(get_db),
+    conn: Connection = DB,
 ):
     page = fetch_page(conn, repo.COLS, repo.FROM, f.where, f.binds, f.order, p)
     service.attach(conn, page["items"])
@@ -56,7 +56,7 @@ def export_users(f: UserQuery = Depends(), _: CurrentUser = Depends(require("use
 
 @router.get("/{user_id}", response_model=UserOut, summary="Detalle de usuario")
 def get_user(
-    user_id: int, _: CurrentUser = Depends(require("users", Level.READ)), conn: Connection = Depends(get_db)
+    user_id: int, _: CurrentUser = Depends(require("users", Level.READ)), conn: Connection = DB
 ):
     user = repo.get(conn, user_id)
     if not user:
@@ -66,7 +66,7 @@ def get_user(
 
 @router.post("", response_model=UserOut, status_code=201, summary="Crear usuario")
 def create_user(
-    body: UserCreate, actor: CurrentUser = Depends(require("users", Level.INSERT)), conn: Connection = Depends(get_db)
+    body: UserCreate, actor: CurrentUser = Depends(require("users", Level.INSERT)), conn: Connection = DB
 ):
     return service.create(conn, actor, body)
 
@@ -74,20 +74,20 @@ def create_user(
 @router.patch("/{user_id}", response_model=UserOut, summary="Editar usuario (nombre, correo, contraseña, rol)")
 def update_user(
     user_id: int, body: UserUpdate, actor: CurrentUser = Depends(require("users", Level.UPDATE)),
-    conn: Connection = Depends(get_db),
+    conn: Connection = DB,
 ):
     return service.update(conn, actor, user_id, body)
 
 
 @router.delete("/{user_id}", response_model=UserOut, summary="Desactivar usuario (no se borra)")
 def deactivate_user(
-    user_id: int, actor: CurrentUser = Depends(require("users", Level.DELETE)), conn: Connection = Depends(get_db)
+    user_id: int, actor: CurrentUser = Depends(require("users", Level.DELETE)), conn: Connection = DB
 ):
     return service.deactivate(conn, actor, user_id)
 
 
 @router.post("/{user_id}/activate", response_model=UserOut, summary="Reactivar usuario")
 def activate_user(
-    user_id: int, actor: CurrentUser = Depends(require("users", Level.UPDATE)), conn: Connection = Depends(get_db)
+    user_id: int, actor: CurrentUser = Depends(require("users", Level.UPDATE)), conn: Connection = DB
 ):
     return service.activate(conn, actor, user_id)

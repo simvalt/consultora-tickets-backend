@@ -39,9 +39,12 @@ def order_sql(sort: Sort, columns: dict[str, str], tiebreak: str) -> str:
 
 
 def fetch_page(
-    conn: Connection, cols: str, from_sql: str, where: str, binds: dict[str, Any], order: str, p: PageParams
+    conn: Connection, cols: str, from_sql: str, where: str, binds: dict[str, Any], order: str, p: PageParams,
+    count_from: str | None = None,
 ) -> dict[str, Any]:
-    total = conn.execute(text(f"SELECT count(*) {from_sql} WHERE {where}"), binds).scalar_one()
+    """Página + total. `count_from` permite contar sobre la tabla base sin los JOIN de presentación
+    (válido cuando los filtros sólo usan columnas de esa tabla y los JOIN son 1:1)."""
+    total = conn.execute(text(f"SELECT count(*) {count_from or from_sql} WHERE {where}"), binds).scalar_one()
     rows = conn.execute(
         text(f"SELECT {cols} {from_sql} WHERE {where} ORDER BY {order} LIMIT :_limit OFFSET :_offset"),
         {**binds, "_limit": p.page_size, "_offset": (p.page - 1) * p.page_size},

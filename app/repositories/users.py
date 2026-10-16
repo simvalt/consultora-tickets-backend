@@ -2,6 +2,7 @@ from typing import Any
 
 from sqlalchemy import Connection, text
 
+from app.permissions import MODULES
 from app.query import Sort, like, order_sql
 
 COLS = (
@@ -69,9 +70,7 @@ def revoke_tokens(conn: Connection, user_id: int) -> None:
 
 
 def count_active_admins(conn: Connection) -> int:
-    """Admin = usuario activo con rol activo y nivel 4 en todos los módulos."""
-    from app.permissions import MODULES
-
+    """Admin = usuario activo con rol activo y nivel EFECTIVO 4 (override o rol) en todos los módulos."""
     return conn.execute(
         text(
             "SELECT count(*) FROM users u JOIN roles r ON r.id = u.role_id AND r.is_active "

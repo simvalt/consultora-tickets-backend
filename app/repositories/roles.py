@@ -80,12 +80,9 @@ def set_permissions(conn: Connection, role_id: int, perms: dict[str, int]) -> No
 
 
 def update(conn: Connection, role_id: int, fields: dict[str, Any]) -> None:
-    fields = {**fields}
-    sets = ", ".join(f"{k} = :{k}" for k in fields)
-    if fields:
-        conn.execute(text(f"UPDATE roles SET {sets}, updated_at = now() WHERE id = :id"), {**fields, "id": role_id})
-    else:
-        conn.execute(text("UPDATE roles SET updated_at = now() WHERE id = :id"), {"id": role_id})
+    """Actualiza las columnas indicadas (claves controladas por el servicio) y siempre `updated_at`."""
+    sets = "".join(f"{k} = :{k}, " for k in fields)
+    conn.execute(text(f"UPDATE roles SET {sets}updated_at = now() WHERE id = :id"), {**fields, "id": role_id})
 
 
 def active_user_count(conn: Connection, role_id: int) -> int:

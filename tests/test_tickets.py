@@ -208,7 +208,10 @@ def test_edit_ticket_fields(client, world, login, api):
     assert body["title"] == "Nuevo título" and body["priority"] == "critica" and body["due_at"] is None
     assert client.patch(f"/api/tickets/{tid}", json={"title": "ab"}, headers=h).status_code == 422
     assert client.patch(f"/api/tickets/{tid}", json={"client_id": 999}, headers=h).status_code == 400
-    assert client.patch(f"/api/tickets/{tid}", json={"status": "cerrado"}, headers=h).json()["status"] == "sin_inicio"
+    # Campos desconocidos (p. ej. intentar cambiar el estatus por PATCH) se rechazan en lugar de ignorarse.
+    assert client.patch(f"/api/tickets/{tid}", json={"status": "cerrado"}, headers=h).status_code == 422
+    assert client.patch(f"/api/tickets/{tid}", json={"title": None}, headers=h).status_code == 422
+    assert api.get(tid).json()["status"] == "sin_inicio"
 
 
 def test_create_validations(client, world, login, make_client):

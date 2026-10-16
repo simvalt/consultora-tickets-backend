@@ -77,21 +77,14 @@ def create(conn: Connection, actor: CurrentUser, data: TicketCreate) -> dict:
 
 def update(conn: Connection, ticket_id: int, data: TicketUpdate) -> dict:
     _locked(conn, ticket_id)
-    fields = data.model_dump(exclude_unset=True)
-    if fields.get("title") is None:
-        fields.pop("title", None)
-    for required in ("client_id", "category_id", "priority"):
-        if fields.get(required) is None:
-            fields.pop(required, None)
-    if fields.get("description") is None:
-        fields.pop("description", None)
+    fields = data.model_dump(exclude_unset=True)  # sólo lo enviado; due_at=None quita el vencimiento
     if "client_id" in fields:
         current = repo.get(conn, ticket_id)
         if fields["client_id"] != current["client_id"]:
-            _check_client(conn, fields["client_id"])
+            _check_client(conn, fields["client_id"])  # un cliente inactivo sólo se conserva, no se asigna
     if "category_id" in fields:
         _check_category(conn, fields["category_id"])
-    if fields or "due_at" in data.model_fields_set:
+    if fields:
         repo.update(conn, ticket_id, {**fields, "updated_at": _now()})
     return detail(conn, ticket_id)
 

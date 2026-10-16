@@ -1,3 +1,4 @@
+import logging
 import threading
 import time
 from datetime import UTC, datetime, timedelta
@@ -7,35 +8,77 @@ from sqlalchemy import Connection, text
 from app.config import get_settings
 from app.deps import CurrentUser, load_permissions
 from app.errors import AppError
-from app.security import DUMMY_HASH, create_access_token, hash_refresh_token, new_refresh_token, verify_password
+from app.security import (
+    DUMMY_HASH,
+    create_access_token,
+    hash_password,
+    hash_refresh_token,
+    new_refresh_token,
+    verify_password,
+)
+
+log = logging.getLogger("tickets.auth")
+TOO_MANY = AppError(429, "too_many_attempts", "Demasiados intentos fallidos. Inténtalo más tarde.")
 
 
 class LoginRateLimiter:
-    """Límite de intentos fallidos por (IP, correo) en memoria. Con varias réplicas: usar Redis o el WAF de Cloudflare."""
+    """Intentos fallidos de login en memoria con tres ventanas:
+
+    - IP + correo (fuerza bruta sobre una cuenta),
+    - sólo IP (muchas cuentas desde un origen: credential stuffing),
+    - sólo correo (una cuenta desde muchas IPs: ataque distribuido).
+
+    Con varias réplicas debe sustituirse por Redis o por reglas del WAF de Cloudflare.
+    """
+
+    MAX_KEYS = 50_000
 
     def __init__(self) -> None:
         self._fails: dict[str, list[float]] = {}
         self._lock = threading.Lock()
 
-    def _recent(self, key: str) -> list[float]:
+    @staticmethod
+    def _keys(ip: str, email: str) -> list[tuple[str, int]]:
         s = get_settings()
-        cutoff = time.monotonic() - s.login_window_seconds
-        recent = [t for t in self._fails.get(key, []) if t > cutoff]
-        self._fails[key] = recent
+        return [
+            (f"ie|{ip}|{email}", s.login_max_attempts),
+            (f"i|{ip}", s.login_max_attempts_ip),
+            (f"e|{email}", s.login_max_attempts_email),
+        ]
+
+    def _recent(self, key: str, now: float) -> list[float]:
+        cutoff = now - get_settings().login_window_seconds
+        recent = [t for t in self._fails.get(key, ()) if t > cutoff]
+        if recent:
+            self._fails[key] = recent
+        else:
+            self._fails.pop(key, None)
         return recent
 
-    def check(self, key: str) -> None:
-        with self._lock:
-            if len(self._recent(key)) >= get_settings().login_max_attempts:
-                raise AppError(429, "too_many_attempts", "Demasiados intentos fallidos. Inténtalo más tarde.")
+    def _purge(self, now: float) -> None:
+        """Evita que el diccionario crezca sin límite con claves caducadas."""
+        if len(self._fails) > self.MAX_KEYS:
+            for key in list(self._fails):
+                self._recent(key, now)
 
-    def fail(self, key: str) -> None:
+    def check(self, ip: str, email: str) -> None:
+        now = time.monotonic()
         with self._lock:
-            self._recent(key).append(time.monotonic())
+            for key, limit in self._keys(ip, email):
+                if len(self._recent(key, now)) >= limit:
+                    log.warning("Login bloqueado por exceso de intentos (%s)", key.split("|")[0])
+                    raise TOO_MANY
 
-    def clear(self, key: str) -> None:
+    def fail(self, ip: str, email: str) -> None:
+        now = time.monotonic()
         with self._lock:
-            self._fails.pop(key, None)
+            for key, _ in self._keys(ip, email):
+                self._fails.setdefault(key, []).append(now)
+            self._purge(now)
+
+    def success(self, ip: str, email: str) -> None:
+        with self._lock:
+            self._fails.pop(f"ie|{ip}|{email}", None)
 
     def reset(self) -> None:
         with self._lock:
@@ -45,17 +88,15 @@ class LoginRateLimiter:
 limiter = LoginRateLimiter()
 
 
+def _mask(email: str) -> str:
+    name, _, domain = email.partition("@")
+    return f"{name[:2]}***@{domain}"
+
+
 def _me(conn: Connection, row) -> dict:
     return {
         "id": row["id"], "email": row["email"], "full_name": row["full_name"], "role_id": row["role_id"],
         "role_name": row["role_name"], "permissions": load_permissions(conn, row["role_id"], row["id"]),
-    }
-
-
-def me_payload(conn: Connection, user: CurrentUser) -> dict:
-    return {
-        "id": user.id, "email": user.email, "full_name": user.full_name, "role_id": user.role_id,
-        "role_name": user.role_name, "permissions": user.permissions,
     }
 
 
@@ -69,9 +110,14 @@ def _issue_refresh(conn: Connection, user_id: int) -> tuple[str, datetime]:
     return raw, expires
 
 
+def _session(conn: Connection, row) -> tuple[dict, str, datetime]:
+    refresh_raw, expires = _issue_refresh(conn, row["id"])
+    token, ttl = create_access_token(row["id"])
+    return {"access_token": token, "expires_in": ttl, "user": _me(conn, row)}, refresh_raw, expires
+
+
 def login(conn: Connection, email: str, password: str, ip: str) -> tuple[dict, str, datetime]:
-    key = f"{ip}|{email}"
-    limiter.check(key)
+    limiter.check(ip, email)
     row = conn.execute(
         text(
             "SELECT u.id, u.email, u.full_name, u.password_hash, u.is_active, u.role_id, r.name AS role_name, "
@@ -79,18 +125,19 @@ def login(conn: Connection, email: str, password: str, ip: str) -> tuple[dict, s
         ),
         {"e": email},
     ).mappings().first()
+    # Se verifica siempre un hash (real o de relleno) para no revelar por tiempo si el correo existe.
     ok = verify_password(password, row["password_hash"] if row else DUMMY_HASH)
     if not row or not ok:
-        limiter.fail(key)
+        limiter.fail(ip, email)
+        log.info("Login fallido para %s desde %s", _mask(email), ip)
         raise AppError(401, "invalid_credentials", "Correo o contraseña incorrectos.")
     if not row["is_active"] or not row["role_active"]:
+        log.info("Login rechazado (usuario inactivo) para %s", _mask(email))
         raise AppError(403, "user_inactive", "Tu usuario está inactivo. Contacta a un administrador.")
-    limiter.clear(key)
+    limiter.success(ip, email)
     conn.execute(text("UPDATE users SET last_login_at = now() WHERE id = :id"), {"id": row["id"]})
     conn.execute(text("DELETE FROM refresh_tokens WHERE user_id = :u AND expires_at < now()"), {"u": row["id"]})
-    refresh, expires = _issue_refresh(conn, row["id"])
-    token, ttl = create_access_token(row["id"])
-    return {"access_token": token, "expires_in": ttl, "user": _me(conn, row)}, refresh, expires
+    return _session(conn, row)
 
 
 def refresh(conn: Connection, raw: str | None) -> tuple[dict, str, datetime]:
@@ -110,9 +157,7 @@ def refresh(conn: Connection, raw: str | None) -> tuple[dict, str, datetime]:
         raise invalid
     # Rotación: el token usado se revoca y se emite uno nuevo.
     conn.execute(text("UPDATE refresh_tokens SET revoked_at = now() WHERE id = :id"), {"id": row["token_id"]})
-    new_raw, expires = _issue_refresh(conn, row["id"])
-    token, ttl = create_access_token(row["id"])
-    return {"access_token": token, "expires_in": ttl, "user": _me(conn, row)}, new_raw, expires
+    return _session(conn, row)
 
 
 def logout(conn: Connection, raw: str | None) -> None:
@@ -121,3 +166,37 @@ def logout(conn: Connection, raw: str | None) -> None:
             text("UPDATE refresh_tokens SET revoked_at = now() WHERE token_hash = :h AND revoked_at IS NULL"),
             {"h": hash_refresh_token(raw)},
         )
+
+
+def set_password(conn: Connection, user_id: int, new_password: str) -> None:
+    """Cambia la contraseña e invalida TODAS las sesiones del usuario (refresh revocados y access tokens
+    anteriores rechazados por `password_changed_at`)."""
+    conn.execute(
+        text("UPDATE users SET password_hash = :h, password_changed_at = now(), updated_at = now() WHERE id = :id"),
+        {"h": hash_password(new_password), "id": user_id},
+    )
+    conn.execute(
+        text("UPDATE refresh_tokens SET revoked_at = now() WHERE user_id = :u AND revoked_at IS NULL"), {"u": user_id}
+    )
+
+
+def change_own_password(
+    conn: Connection, user: CurrentUser, current: str, new: str
+) -> tuple[dict, str, datetime]:
+    """Cambio de la propia contraseña: exige la actual y devuelve una sesión nueva (las demás se cierran)."""
+    stored = conn.execute(text("SELECT password_hash FROM users WHERE id = :id"), {"id": user.id}).scalar_one()
+    if not verify_password(current, stored):
+        raise AppError(400, "invalid_current_password", "La contraseña actual no es correcta.")
+    if current == new:
+        raise AppError(400, "same_password", "La nueva contraseña debe ser distinta de la actual.")
+    # password_changed_at = now() (inicio de la transacción), así el token nuevo (emitido después) sigue siendo válido.
+    set_password(conn, user.id, new)
+    row = conn.execute(
+        text(
+            "SELECT u.id, u.email, u.full_name, u.role_id, r.name AS role_name "
+            "FROM users u JOIN roles r ON r.id = u.role_id WHERE u.id = :id"
+        ),
+        {"id": user.id},
+    ).mappings().one()
+    log.info("Contraseña cambiada por el propio usuario %s", user.id)
+    return _session(conn, row)

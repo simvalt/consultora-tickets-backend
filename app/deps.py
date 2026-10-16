@@ -4,7 +4,7 @@ from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy import Connection, text
 
-from app.db import get_db
+from app.db import DB
 from app.errors import forbidden
 from app.permissions import MODULES, Level, effective, is_full_access
 from app.security import decode_access_token
@@ -51,25 +51,36 @@ def load_permissions(conn: Connection, role_id: int, user_id: int) -> dict[str, 
 
 
 def get_current_user(
-    creds: HTTPAuthorizationCredentials | None = Depends(bearer), conn: Connection = Depends(get_db)
+    creds: HTTPAuthorizationCredentials | None = Depends(bearer), conn: Connection = DB
 ) -> CurrentUser:
-    """Autentica y recarga rol/permisos desde la BD en cada solicitud (los cambios aplican de inmediato)."""
+    """Autentica y recarga rol/permisos desde la BD en cada solicitud (los cambios aplican de inmediato).
+
+    Una sola consulta trae usuario, rol, permisos del rol y overrides. Se rechazan los tokens emitidos
+    antes del último cambio de contraseña.
+    """
     if creds is None:
         raise _unauthorized()
-    user_id = decode_access_token(creds.credentials)
-    if user_id is None:
+    claims = decode_access_token(creds.credentials)
+    if claims is None:
         raise _unauthorized()
+    user_id, issued_at = claims
     row = conn.execute(
         text(
-            "SELECT u.id, u.email, u.full_name, u.role_id, r.name AS role_name "
+            "SELECT u.id, u.email, u.full_name, u.role_id, r.name AS role_name, u.password_changed_at, "
+            "(SELECT json_object_agg(module, level) FROM role_permissions WHERE role_id = r.id) AS role_perms, "
+            "(SELECT json_object_agg(module, level) FROM user_permissions WHERE user_id = u.id) AS user_perms "
             "FROM users u JOIN roles r ON r.id = u.role_id "
             "WHERE u.id = :id AND u.is_active AND r.is_active"
         ),
         {"id": user_id},
     ).mappings().first()
-    if row is None:
+    if row is None or issued_at < int(row["password_changed_at"].timestamp()):
         raise _unauthorized()
-    return CurrentUser(**row, permissions=load_permissions(conn, row["role_id"], row["id"]))
+    role_perms = {m: 0 for m in MODULES} | (row["role_perms"] or {})
+    return CurrentUser(
+        id=row["id"], email=row["email"], full_name=row["full_name"], role_id=row["role_id"],
+        role_name=row["role_name"], permissions=effective(role_perms, row["user_perms"] or {}),
+    )
 
 
 def require(module: str, level: Level):

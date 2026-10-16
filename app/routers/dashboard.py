@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import Connection
 
 from app.csvutil import csv_response
-from app.db import get_db
+from app.db import DB
 from app.deps import CurrentUser, require
 from app.permissions import Level
 from app.schemas import DashboardOut, Priority
@@ -28,7 +28,7 @@ def dashboard_filters(
 def get_dashboard(
     f: service.DashboardFilters = Depends(dashboard_filters),
     _: CurrentUser = Depends(require("dashboard", Level.READ)),
-    conn: Connection = Depends(get_db),
+    conn: Connection = DB,
 ):
     return service.compute(conn, f)
 
@@ -37,7 +37,7 @@ def get_dashboard(
 def export_dashboard(
     f: service.DashboardFilters = Depends(dashboard_filters),
     _: CurrentUser = Depends(require("dashboard", Level.READ)),
-    conn: Connection = Depends(get_db),
+    conn: Connection = DB,
 ):
     d = service.compute(conn, f)
     rows: list[list[object]] = [

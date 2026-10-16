@@ -1,8 +1,8 @@
 """Esquemas de entrada/salida. Los de salida nunca incluyen hashes ni tokens internos."""
-from datetime import datetime
-from typing import Annotated, Generic, Literal, TypeVar
+from datetime import UTC, datetime
+from typing import Annotated, Any, Literal
 
-from pydantic import BaseModel, Field, StringConstraints, field_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, field_validator, model_validator
 
 from app.permissions import parse_permissions
 
@@ -18,10 +18,39 @@ Reason = Annotated[str, StringConstraints(strip_whitespace=True, max_length=2000
 Priority = Literal["baja", "media", "alta", "critica"]
 Status = Literal["sin_inicio", "iniciado", "en_proceso", "pendiente", "cancelado", "cerrado", "rechazado"]
 
-T = TypeVar("T")
+def _reject_nul(value: Any) -> None:
+    if isinstance(value, str) and "\x00" in value:
+        raise ValueError("El texto contiene caracteres no permitidos.")
+    if isinstance(value, dict):
+        for k, v in value.items():
+            _reject_nul(k)
+            _reject_nul(v)
+    elif isinstance(value, list):
+        for v in value:
+            _reject_nul(v)
 
 
-class Page(BaseModel, Generic[T]):
+class Input(BaseModel):
+    """Base de todos los cuerpos de entrada: rechaza campos desconocidos y el carácter NUL
+    (PostgreSQL no admite NUL en texto; sin esta validación terminaría en un error 500)."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _no_nul(cls, data: Any) -> Any:
+        _reject_nul(data)
+        return data
+
+
+def _as_utc(v: datetime | None) -> datetime | None:
+    """Las fechas sin zona horaria se interpretan explícitamente como UTC."""
+    if v is not None and v.tzinfo is None:
+        return v.replace(tzinfo=UTC)
+    return v
+
+
+class Page[T](BaseModel):
     items: list[T]
     total: int
     page: int
@@ -30,7 +59,7 @@ class Page(BaseModel, Generic[T]):
 
 
 # ----------------------------------------------------------------- auth
-class LoginIn(BaseModel):
+class LoginIn(Input):
     email: Annotated[str, StringConstraints(strip_whitespace=True, to_lower=True, min_length=1, max_length=255)]
     password: Annotated[str, StringConstraints(min_length=1, max_length=128)]
 
@@ -51,6 +80,11 @@ class TokenOut(BaseModel):
     user: MeOut
 
 
+class ChangePasswordIn(Input):
+    current_password: Annotated[str, StringConstraints(min_length=1, max_length=128)]
+    new_password: Password
+
+
 # ---------------------------------------------------------------- users
 class UserOut(BaseModel):
     id: int
@@ -66,7 +100,7 @@ class UserOut(BaseModel):
     last_login_at: datetime | None = None
 
 
-class UserCreate(BaseModel):
+class UserCreate(Input):
     email: Email
     full_name: Name
     password: Password
@@ -79,7 +113,7 @@ class UserCreate(BaseModel):
         return _check_permissions(v)
 
 
-class UserUpdate(BaseModel):
+class UserUpdate(Input):
     email: Email | None = None
     full_name: Name | None = None
     password: Password | None = None
@@ -110,7 +144,7 @@ class RoleOut(BaseModel):
     updated_at: datetime
 
 
-class RoleCreate(BaseModel):
+class RoleCreate(Input):
     name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)]
     description: Annotated[str, StringConstraints(strip_whitespace=True, max_length=255)] = ""
     permissions: dict[str, int | str] = Field(default_factory=dict)
@@ -121,7 +155,7 @@ class RoleCreate(BaseModel):
         return _check_permissions(v)
 
 
-class RoleUpdate(BaseModel):
+class RoleUpdate(Input):
     name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)] | None = None
     description: Annotated[str, StringConstraints(strip_whitespace=True, max_length=255)] | None = None
     permissions: dict[str, int | str] | None = None
@@ -144,14 +178,14 @@ class ClientOut(BaseModel):
     updated_at: datetime
 
 
-class ClientCreate(BaseModel):
+class ClientCreate(Input):
     name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=150)]
     contact_name: Annotated[str, StringConstraints(strip_whitespace=True, max_length=150)] = ""
     email: Annotated[str, StringConstraints(strip_whitespace=True, max_length=255)] = ""
     phone: Annotated[str, StringConstraints(strip_whitespace=True, max_length=40)] = ""
 
 
-class ClientUpdate(BaseModel):
+class ClientUpdate(Input):
     name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=150)] | None = None
     contact_name: Annotated[str, StringConstraints(strip_whitespace=True, max_length=150)] | None = None
     email: Annotated[str, StringConstraints(strip_whitespace=True, max_length=255)] | None = None
@@ -187,7 +221,7 @@ class TicketDetail(TicketOut):
     allowed_transitions: list[Status]
 
 
-class TicketCreate(BaseModel):
+class TicketCreate(Input):
     title: Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=200)]
     description: Text = ""
     client_id: int
@@ -196,28 +230,39 @@ class TicketCreate(BaseModel):
     assignee_id: int | None = None
     due_at: datetime | None = None
 
+    _utc = field_validator("due_at")(_as_utc)
 
-class TicketUpdate(BaseModel):
+
+class TicketUpdate(Input):
     title: Annotated[str, StringConstraints(strip_whitespace=True, min_length=3, max_length=200)] | None = None
     description: Text | None = None
     client_id: int | None = None
     category_id: int | None = None
     priority: Priority | None = None
-    due_at: datetime | None = None
+    due_at: datetime | None = None  # null = quitar el vencimiento
+
+    _utc = field_validator("due_at")(_as_utc)
+
+    @model_validator(mode="after")
+    def _not_null(self) -> "TicketUpdate":
+        for name in ("title", "description", "client_id", "category_id", "priority"):
+            if name in self.model_fields_set and getattr(self, name) is None:
+                raise ValueError(f"El campo «{name}» no puede ser nulo.")
+        return self
 
 
-class AssignIn(BaseModel):
+class AssignIn(Input):
     assignee_id: int | None
 
 
-class StatusIn(BaseModel):
+class StatusIn(Input):
     status: Status
     reason: Reason | None = None
     resolution: Reason | None = None
     assignee_id: int | None = None
 
 
-class CommentIn(BaseModel):
+class CommentIn(Input):
     body: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=5000)]
 
 

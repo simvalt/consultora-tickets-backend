@@ -77,8 +77,10 @@ Ver `.env.example` (comentado). Las del backend:
 | `COOKIE_SECURE` | `true` bajo HTTPS (producción) · `false` en `http://localhost` |
 | `COOKIE_SAMESITE` | `lax` (por defecto) |
 | `CORS_ORIGINS` | Orígenes permitidos separados por comas; vacío = sin CORS (mismo origen) |
-| `LOGIN_MAX_ATTEMPTS` / `LOGIN_WINDOW_SECONDS` | Límite de intentos fallidos por IP+correo |
-| `DOCS_ENABLED` | Publica/oculta `/api/docs` y `/api/openapi.json` |
+| `LOGIN_MAX_ATTEMPTS` / `LOGIN_MAX_ATTEMPTS_IP` / `LOGIN_MAX_ATTEMPTS_EMAIL` / `LOGIN_WINDOW_SECONDS` | Intentos fallidos permitidos por IP+correo (5), por IP (20) y por correo (10) en la ventana (300 s) |
+| `DOCS_ENABLED` | Publica/oculta `/api/docs` y `/api/openapi.json`. Vacío = activados salvo con `APP_ENV=production` |
+
+Con `APP_ENV=production` el backend **no arranca** si `JWT_SECRET` es el de ejemplo o `COOKIE_SECURE=false`.
 | `FORWARDED_ALLOW_IPS` | Proxies de confianza para `X-Forwarded-*` |
 
 ## Pruebas, lint y compilación
@@ -87,12 +89,16 @@ Las pruebas usan un **PostgreSQL real**; el esquema se crea ejecutando las migra
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                      # 183 pruebas (usa la base tickets_test; se crea sola)
+pytest                      # 297 pruebas (usa la base tickets_test; se crea sola)
+pip-audit -r requirements.txt       # vulnerabilidades conocidas en dependencias
+python scripts/qa_performance.py   # prueba de carga: 200 000 tickets en la base tickets_perf
 ruff check .                # lint
 docker build -t tickets-backend .   # compilación de la imagen
 ```
 
-Variables: `TEST_DATABASE_URL` (por defecto `postgresql://tickets:change_me_local@127.0.0.1:5432/tickets_test`) y `DATABASE_REPO_PATH` (por defecto `../consultora-tickets-database`). Cubren: login correcto/incorrecto/inactivo y rotación de refresh; escalera de permisos por módulo y rechazo de operaciones no autorizadas; anti-escalada de privilegios; protección del último administrador; las 49 combinaciones de transiciones; motivo/resolución obligatorios; historial; filtros/orden/paginación; CSV idéntico al listado (más de una página) y protección contra fórmulas; métricas con datos conocidos.
+Variables: `TEST_DATABASE_URL` (por defecto `postgresql://tickets:change_me_local@127.0.0.1:5432/tickets_test`) y `DATABASE_REPO_PATH` (por defecto `../consultora-tickets-database`). Cubren: login correcto/incorrecto/inactivo y rotación de refresh; escalera de permisos por módulo y rechazo de operaciones no autorizadas; anti-escalada de privilegios; protección del último administrador; las 49 combinaciones de transiciones; motivo/resolución obligatorios; historial; filtros/orden/paginación; CSV idéntico al listado (más de una página) y protección contra fórmulas; métricas con datos conocidos. Además, `test_qa_security.py`, `test_qa_edge.py` y `test_qa_concurrency.py` cubren tokens manipulados, límites de intentos, asignación masiva, inyección, casos límite y carreras.
+
+**Auditoría de seguridad, optimizaciones medidas y resultados de QA: [docs/AUDITORIA_QA.md](docs/AUDITORIA_QA.md).**
 
 ## Arquitectura
 
@@ -116,9 +122,12 @@ Decisiones:
 ## Autenticación y sesiones
 
 - Login con correo/contraseña (argon2id). Mismo error para correo inexistente y contraseña incorrecta; usuarios o roles inactivos → `403 user_inactive`.
-- **Access token** JWT (15 min) que el frontend guarda sólo en memoria. **Refresh token** opaco, aleatorio, en cookie `HttpOnly; Secure; SameSite=Lax; Path=/api/auth`; en BD sólo se guarda su SHA-256. Se **rota en cada renovación** (el anterior se revoca) y `POST /api/auth/logout` lo revoca. Cambiar contraseña/rol o desactivar a un usuario revoca sus refresh tokens.
+- **Access token** JWT (15 min) que el frontend guarda sólo en memoria. **Refresh token** opaco, aleatorio, en cookie `HttpOnly; Secure; SameSite=Lax; Path=/api/auth`; en BD sólo se guarda su SHA-256. Se **rota en cada renovación** (el anterior se revoca) y `POST /api/auth/logout` lo revoca. Cambiar contraseña/rol o desactivar a un usuario revoca sus refresh tokens; tras un cambio o restablecimiento de contraseña también se rechazan los access tokens emitidos antes (`users.password_changed_at`).
+- **Cambio de la propia contraseña**: `POST /api/auth/change-password` exige la contraseña actual y devuelve una sesión nueva (cierra las demás). Un administrador puede restablecer la de otros por `PATCH /api/users/{id}`, nunca la suya por esa vía.
 - Al expirar la sesión (o fallar la renovación) el frontend regresa al login.
-- Límite de intentos fallidos (5 por 5 min por IP+correo, en memoria).
+- Límite de intentos fallidos en memoria con tres ventanas: IP+correo, IP (contra *credential stuffing*) y correo (contra ataques distribuidos). nginx sobrescribe `X-Forwarded-For`, así que no se puede falsear la IP.
+- Entradas estrictas: campos desconocidos → 422; texto con NUL → 422; fechas sin zona → UTC. Todas las respuestas de `/api` llevan `Cache-Control: no-store`.
+- Se registran (sin contraseñas ni tokens) los logins fallidos, los bloqueos y los cambios de contraseña.
 
 ## Permisos
 
@@ -177,7 +186,7 @@ OpenAPI interactivo en `/api/docs`. Errores uniformes: `{"error": {"code", "mess
 ## Preparación para despliegue (Cloudflare / HTTPS)
 
 - **Proxy**: el `nginx` del frontend sirve la SPA y reenvía `/api` al backend (mismo origen → cookie de refresco sin CORS). Cloudflare → tu servidor (nginx/Traefik/Caddy) → contenedor `frontend` (:8080) → `backend` (:8000). Uvicorn corre con `--proxy-headers` (respeta `X-Forwarded-For/Proto`); restringe `FORWARDED_ALLOW_IPS` a tu proxy.
-- Define `COOKIE_SECURE=true`, `APP_ENV=production`, un `JWT_SECRET` y contraseñas propios, `ADMIN_EMAIL/ADMIN_PASSWORD` reales; **no** uses el perfil `demo`. Opcional `DOCS_ENABLED=false`.
+- Define `COOKIE_SECURE=true`, `APP_ENV=production`, un `JWT_SECRET` y contraseñas propios, `ADMIN_EMAIL/ADMIN_PASSWORD` reales; **no** uses el perfil `demo`. La documentación interactiva queda oculta por defecto en producción.
 - Cloudflare: modo SSL/TLS **Full (strict)**; IP real vía `CF-Connecting-IP` (plantilla comentada en `frontend/docker/nginx.conf.template`); reglas WAF/rate limiting sobre `/api/auth/login` complementan el límite en memoria.
 - Migraciones: ejecutar la imagen del repo *database* como paso previo (ver su README). En producción el servicio `migrate` y `db` de este compose se sustituyen por la base gestionada.
 - Imágenes sin privilegios (`api` UID 10001; nginx-unprivileged); sin secretos en Git (`.env` ignorado).

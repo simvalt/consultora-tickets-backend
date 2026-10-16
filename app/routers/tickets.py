@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import Connection
 
 from app.csvutil import csv_response
-from app.db import get_db, get_engine
+from app.db import DB, get_engine
 from app.deps import CurrentUser, require
 from app.permissions import Level
 from app.query import PageParams, Sort, fetch_page, page_params, stream_rows
@@ -68,9 +68,9 @@ def list_tickets(
     f: TicketQuery = Depends(),
     p: PageParams = Depends(page_params),
     _: CurrentUser = Depends(require("tickets", Level.READ)),
-    conn: Connection = Depends(get_db),
+    conn: Connection = DB,
 ):
-    return fetch_page(conn, repo.COLS, repo.FROM, f.where, f.binds, f.order, p)
+    return fetch_page(conn, repo.COLS, repo.FROM, f.where, f.binds, f.order, p, count_from=repo.COUNT_FROM)
 
 
 @router.get("/export", summary="Exportar a CSV todos los tickets que coinciden con los filtros")
@@ -91,14 +91,14 @@ def export_tickets(f: TicketQuery = Depends(), _: CurrentUser = Depends(require(
 @router.post("", response_model=TicketDetail, status_code=201, summary="Crear ticket")
 def create_ticket(
     body: TicketCreate, actor: CurrentUser = Depends(require("tickets", Level.INSERT)),
-    conn: Connection = Depends(get_db),
+    conn: Connection = DB,
 ):
     return service.create(conn, actor, body)
 
 
 @router.get("/{ticket_id}", response_model=TicketDetail, summary="Detalle de ticket")
 def get_ticket(
-    ticket_id: int, _: CurrentUser = Depends(require("tickets", Level.READ)), conn: Connection = Depends(get_db)
+    ticket_id: int, _: CurrentUser = Depends(require("tickets", Level.READ)), conn: Connection = DB
 ):
     return service.detail(conn, ticket_id)
 
@@ -106,14 +106,14 @@ def get_ticket(
 @router.patch("/{ticket_id}", response_model=TicketDetail, summary="Editar datos del ticket")
 def update_ticket(
     ticket_id: int, body: TicketUpdate, _: CurrentUser = Depends(require("tickets", Level.UPDATE)),
-    conn: Connection = Depends(get_db),
+    conn: Connection = DB,
 ):
     return service.update(conn, ticket_id, body)
 
 
 @router.delete("/{ticket_id}", status_code=204, summary="Eliminación lógica (conserva historial)")
 def delete_ticket(
-    ticket_id: int, actor: CurrentUser = Depends(require("tickets", Level.DELETE)), conn: Connection = Depends(get_db)
+    ticket_id: int, actor: CurrentUser = Depends(require("tickets", Level.DELETE)), conn: Connection = DB
 ):
     service.delete(conn, actor, ticket_id)
 
@@ -121,7 +121,7 @@ def delete_ticket(
 @router.post("/{ticket_id}/assign", response_model=TicketDetail, summary="Asignar o cambiar responsable")
 def assign_ticket(
     ticket_id: int, body: AssignIn, actor: CurrentUser = Depends(require("tickets", Level.UPDATE)),
-    conn: Connection = Depends(get_db),
+    conn: Connection = DB,
 ):
     return service.assign(conn, actor, ticket_id, body)
 
@@ -129,14 +129,14 @@ def assign_ticket(
 @router.post("/{ticket_id}/status", response_model=TicketDetail, summary="Cambiar estatus (transiciones válidas)")
 def change_status(
     ticket_id: int, body: StatusIn, actor: CurrentUser = Depends(require("tickets", Level.UPDATE)),
-    conn: Connection = Depends(get_db),
+    conn: Connection = DB,
 ):
     return service.change_status(conn, actor, ticket_id, body)
 
 
 @router.get("/{ticket_id}/comments", response_model=list[CommentOut], summary="Comentarios internos")
 def list_comments(
-    ticket_id: int, _: CurrentUser = Depends(require("tickets", Level.READ)), conn: Connection = Depends(get_db)
+    ticket_id: int, _: CurrentUser = Depends(require("tickets", Level.READ)), conn: Connection = DB
 ):
     return service.comments(conn, ticket_id)
 
@@ -144,13 +144,13 @@ def list_comments(
 @router.post("/{ticket_id}/comments", response_model=CommentOut, status_code=201, summary="Agregar comentario")
 def add_comment(
     ticket_id: int, body: CommentIn, actor: CurrentUser = Depends(require("tickets", Level.UPDATE)),
-    conn: Connection = Depends(get_db),
+    conn: Connection = DB,
 ):
     return service.add_comment(conn, actor, ticket_id, body)
 
 
 @router.get("/{ticket_id}/events", response_model=list[EventOut], summary="Historial de estatus y asignaciones")
 def list_events(
-    ticket_id: int, _: CurrentUser = Depends(require("tickets", Level.READ)), conn: Connection = Depends(get_db)
+    ticket_id: int, _: CurrentUser = Depends(require("tickets", Level.READ)), conn: Connection = DB
 ):
     return service.history(conn, ticket_id)

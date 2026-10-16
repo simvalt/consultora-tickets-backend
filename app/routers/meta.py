@@ -3,7 +3,7 @@ from fastapi import APIRouter, Depends
 from sqlalchemy import Connection, text
 
 from app import workflow as wf
-from app.db import get_db
+from app.db import DB
 from app.deps import CurrentUser, get_current_user
 from app.errors import forbidden
 from app.permissions import LEVEL_LABELS, MODULE_LABELS, MODULES, Level
@@ -15,7 +15,7 @@ router = APIRouter(tags=["Catálogos"])
 
 
 @router.get("/meta", summary="Módulos, niveles, estatus, prioridades, categorías y transiciones")
-def meta(_: CurrentUser = Depends(get_current_user), conn: Connection = Depends(get_db)):
+def meta(_: CurrentUser = Depends(get_current_user), conn: Connection = DB):
     categories = conn.execute(text("SELECT id, name FROM ticket_categories ORDER BY id")).mappings().all()
     return {
         "modules": [{"key": m, "label": MODULE_LABELS[m]} for m in MODULES],
@@ -30,7 +30,7 @@ def meta(_: CurrentUser = Depends(get_current_user), conn: Connection = Depends(
 
 
 @router.get("/lookups/clients", response_model=list[LookupItem], summary="Clientes activos (para formularios)")
-def lookup_clients(user: CurrentUser = Depends(get_current_user), conn: Connection = Depends(get_db)):
+def lookup_clients(user: CurrentUser = Depends(get_current_user), conn: Connection = DB):
     if user.level("tickets") < Level.READ and user.level("clients") < Level.READ:
         raise forbidden()
     rows = conn.execute(text("SELECT id, name FROM clients WHERE is_active ORDER BY lower(name)")).mappings().all()
@@ -38,7 +38,7 @@ def lookup_clients(user: CurrentUser = Depends(get_current_user), conn: Connecti
 
 
 @router.get("/lookups/roles", response_model=list[RoleLookup], summary="Roles activos con sus permisos (formularios)")
-def lookup_roles(user: CurrentUser = Depends(get_current_user), conn: Connection = Depends(get_db)):
+def lookup_roles(user: CurrentUser = Depends(get_current_user), conn: Connection = DB):
     if user.level("users") < Level.READ and user.level("roles") < Level.READ:
         raise forbidden()
     rows = conn.execute(text("SELECT id, name FROM roles WHERE is_active ORDER BY lower(name)")).mappings().all()
@@ -48,7 +48,7 @@ def lookup_roles(user: CurrentUser = Depends(get_current_user), conn: Connection
 
 
 @router.get("/lookups/assignees", response_model=list[LookupItem], summary="Usuarios que pueden atender tickets")
-def lookup_assignees(user: CurrentUser = Depends(get_current_user), conn: Connection = Depends(get_db)):
+def lookup_assignees(user: CurrentUser = Depends(get_current_user), conn: Connection = DB):
     if user.level("tickets") < Level.READ and user.level("dashboard") < Level.READ:
         raise forbidden()
     rows = conn.execute(

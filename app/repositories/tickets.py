@@ -22,6 +22,9 @@ FROM = """
     JOIN users cu ON cu.id = t.created_by
     LEFT JOIN users au ON au.id = t.assignee_id
 """
+# Los filtros (where_clause) sólo usan columnas de `t` y los JOIN son 1:1 por FK NOT NULL (o LEFT): el total
+# puede contarse sobre la tabla base.
+COUNT_FROM = "FROM tickets t"
 SORT_COLUMNS = {
     "folio": "t.id", "title": "lower(t.title)", "client": "lower(c.name)", "category": "cat.name",
     "priority": "CASE t.priority WHEN 'baja' THEN 1 WHEN 'media' THEN 2 WHEN 'alta' THEN 3 ELSE 4 END",

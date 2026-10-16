@@ -15,9 +15,9 @@ def create_app() -> FastAPI:
         title="Consultora Tickets API",
         version="1.0.0",
         description="API del sistema interno de tickets. Autenticación: Bearer JWT (ver /api/auth/login).",
-        docs_url="/api/docs" if settings.docs_enabled else None,
+        docs_url="/api/docs" if settings.show_docs else None,
         redoc_url=None,
-        openapi_url="/api/openapi.json" if settings.docs_enabled else None,
+        openapi_url="/api/openapi.json" if settings.show_docs else None,
     )
     if settings.cors_list:
         app.add_middleware(
@@ -34,6 +34,10 @@ def create_app() -> FastAPI:
         response = await call_next(request)
         response.headers.setdefault("X-Content-Type-Options", "nosniff")
         response.headers.setdefault("Referrer-Policy", "no-referrer")
+        response.headers.setdefault("X-Frame-Options", "DENY")
+        if request.url.path.startswith("/api/"):
+            # Respuestas con datos de usuarios autenticados: nunca en cachés intermedias ni del navegador.
+            response.headers.setdefault("Cache-Control", "no-store")
         return response
 
     install_handlers(app)

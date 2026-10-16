@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, Query
 from sqlalchemy import Connection
 
 from app.csvutil import csv_response
-from app.db import get_db, get_engine
+from app.db import DB, get_engine
 from app.deps import CurrentUser, require
 from app.errors import not_found
 from app.permissions import LEVEL_LABELS, MODULE_LABELS, MODULES, Level
@@ -34,7 +34,7 @@ def list_roles(
     f: RoleQuery = Depends(),
     p: PageParams = Depends(page_params),
     _: CurrentUser = Depends(require("roles", Level.READ)),
-    conn: Connection = Depends(get_db),
+    conn: Connection = DB,
 ):
     page = fetch_page(conn, repo.COLS, repo.FROM, f.where, f.binds, f.order, p)
     repo.attach_permissions(conn, page["items"])
@@ -44,7 +44,7 @@ def list_roles(
 @router.get("/export", summary="Exportar roles y permisos a CSV (mismos filtros que el listado)")
 def export_roles(
     f: RoleQuery = Depends(), _: CurrentUser = Depends(require("roles", Level.READ)),
-    conn: Connection = Depends(get_db),
+    conn: Connection = DB,
 ):
     headers = ["Rol", "Descripción", "Activo", "Usuarios", *[MODULE_LABELS[m] for m in MODULES]]
     items = list(stream_rows(get_engine(), repo.COLS, repo.FROM, f.where, f.binds, f.order))
@@ -58,7 +58,7 @@ def export_roles(
 
 
 @router.get("/{role_id}", response_model=RoleOut, summary="Detalle de rol")
-def get_role(role_id: int, _: CurrentUser = Depends(require("roles", Level.READ)), conn: Connection = Depends(get_db)):
+def get_role(role_id: int, _: CurrentUser = Depends(require("roles", Level.READ)), conn: Connection = DB):
     role = repo.get(conn, role_id)
     if not role:
         raise not_found("El rol no existe.")
@@ -67,7 +67,7 @@ def get_role(role_id: int, _: CurrentUser = Depends(require("roles", Level.READ)
 
 @router.post("", response_model=RoleOut, status_code=201, summary="Crear rol")
 def create_role(
-    body: RoleCreate, actor: CurrentUser = Depends(require("roles", Level.INSERT)), conn: Connection = Depends(get_db)
+    body: RoleCreate, actor: CurrentUser = Depends(require("roles", Level.INSERT)), conn: Connection = DB
 ):
     return service.create(conn, actor, body)
 
@@ -75,20 +75,20 @@ def create_role(
 @router.patch("/{role_id}", response_model=RoleOut, summary="Editar rol y matriz de permisos")
 def update_role(
     role_id: int, body: RoleUpdate, actor: CurrentUser = Depends(require("roles", Level.UPDATE)),
-    conn: Connection = Depends(get_db),
+    conn: Connection = DB,
 ):
     return service.update(conn, actor, role_id, body)
 
 
 @router.delete("/{role_id}", response_model=RoleOut, summary="Desactivar rol (no se borra)")
 def deactivate_role(
-    role_id: int, actor: CurrentUser = Depends(require("roles", Level.DELETE)), conn: Connection = Depends(get_db)
+    role_id: int, actor: CurrentUser = Depends(require("roles", Level.DELETE)), conn: Connection = DB
 ):
     return service.deactivate(conn, actor, role_id)
 
 
 @router.post("/{role_id}/activate", response_model=RoleOut, summary="Reactivar rol")
 def activate_role(
-    role_id: int, actor: CurrentUser = Depends(require("roles", Level.UPDATE)), conn: Connection = Depends(get_db)
+    role_id: int, actor: CurrentUser = Depends(require("roles", Level.UPDATE)), conn: Connection = DB
 ):
     return service.activate(conn, actor, role_id)

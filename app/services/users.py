@@ -7,6 +7,7 @@ from app.repositories import roles as roles_repo
 from app.repositories import users as repo
 from app.schemas import UserCreate, UserUpdate
 from app.security import hash_password
+from app.services import auth as auth_service
 
 
 def attach(conn: Connection, users: list[dict]) -> list[dict]:
@@ -94,12 +95,14 @@ def update(conn: Connection, actor: CurrentUser, user_id: int, data: UserUpdate)
         _check_effective(conn, actor, data.role_id if role_changed else target["role_id"], new_overrides)
     if overrides_changed:
         repo.set_overrides(conn, user_id, data.permission_overrides)
-    if data.password is not None:
-        fields["password_hash"] = hash_password(data.password)
+    if data.password is not None and user_id == actor.id:
+        raise forbidden("Para cambiar tu propia contraseña usa «Cambiar contraseña» (requiere la actual).")
     if fields:
         repo.update(conn, user_id, fields)
-    if role_changed or data.password is not None:
-        repo.revoke_tokens(conn, user_id)  # fuerza reautenticación tras cambiar rol o contraseña
+    if data.password is not None:
+        auth_service.set_password(conn, user_id, data.password)  # restablecimiento: cierra sus sesiones
+    elif role_changed:
+        repo.revoke_tokens(conn, user_id)  # fuerza reautenticación tras cambiar el rol
     if role_changed or overrides_changed:
         _ensure_admin_remains(conn)
     return _get(conn, user_id)

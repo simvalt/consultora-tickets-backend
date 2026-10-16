@@ -32,11 +32,14 @@ def create_access_token(user_id: int) -> tuple[str, int]:
     return token, s.access_token_minutes * 60
 
 
-def decode_access_token(token: str) -> int | None:
+def decode_access_token(token: str) -> tuple[int, int] | None:
+    """Devuelve (user_id, iat) si el token es válido; None si no lo es."""
     try:
-        payload = jwt.decode(token, get_settings().jwt_secret, algorithms=["HS256"], options={"require": ["exp", "sub"]})
-        return int(payload["sub"])
-    except (jwt.PyJWTError, ValueError):
+        payload = jwt.decode(
+            token, get_settings().jwt_secret, algorithms=["HS256"], options={"require": ["exp", "iat", "sub"]}
+        )
+        return int(payload["sub"]), int(payload["iat"])
+    except (jwt.PyJWTError, ValueError, TypeError):
         return None
 
 

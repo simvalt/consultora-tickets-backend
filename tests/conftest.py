@@ -84,9 +84,10 @@ def client():
 
 
 def _exec(sql: str, params: tuple = ()):
+    """Ejecuta SQL de preparación; devuelve el primer valor si la sentencia tiene RETURNING."""
     with psycopg.connect(_plain_url(TEST_URL), autocommit=True) as conn:
-        row = conn.execute(sql, params).fetchone() if "RETURNING" in sql else conn.execute(sql, params) and None
-        return row[0] if row else None
+        cur = conn.execute(sql, params)
+        return cur.fetchone()[0] if "RETURNING" in sql else None
 
 
 @pytest.fixture
