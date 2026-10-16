@@ -87,7 +87,7 @@ Las pruebas usan un **PostgreSQL real**; el esquema se crea ejecutando las migra
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                      # 167 pruebas (usa la base tickets_test; se crea sola)
+pytest                      # 183 pruebas (usa la base tickets_test; se crea sola)
 ruff check .                # lint
 docker build -t tickets-backend .   # compilación de la imagen
 ```
@@ -132,9 +132,18 @@ Módulos: `tickets`, `users`, `roles`, `clients`, `dashboard`. Niveles **acumula
 | Eliminar ticket (lógico) / desactivar usuario, rol o cliente | Eliminar |
 | Crear un ticket **con responsable** | Editar |
 
+**Permisos propios por usuario (override).** Además del rol, un usuario puede tener niveles propios por módulo (tabla `user_permissions`). El nivel **efectivo** de cada módulo es el del usuario si lo definió (puede subir o bajar respecto al rol) y, si no, el del rol. Se aplica de inmediato en cada solicitud. `PATCH /api/users/{id}` con `permission_overrides` **reemplaza** el conjunto de overrides (`{}` los quita todos; omitir el campo no los toca). Las matrices (de usuario y de rol) se pueden enviar como JSON legible, con nombres de nivel y alias de módulo:
+
+```json
+{ "Ticket": "crear", "Analítica": "ver", "Usuario": "editar", "Permisos": "leer" }
+```
+
+Niveles: `nada`, `leer`/`ver`, `insertar`/`crear`, `editar`, `eliminar` (o 0-4). Módulos: `tickets`/`ticket`, `users`/`usuarios`, `roles`/`permisos`, `clients`/`clientes`, `dashboard`/`analitica`. La API devuelve `permissions` (efectivos) y `permission_overrides` (propios). En la interfaz, el diálogo de usuario y el de rol tienen una vista **Matriz** y una vista **JSON** sincronizadas.
+
 Reglas adicionales (todas en el backend):
 
-- **Administrador** = usuario activo con rol activo y nivel 4 en todos los módulos. Ninguna operación (desactivar usuario, cambiar su rol, editar/desactivar un rol) puede dejar el sistema sin uno (`409 last_admin`; las operaciones se serializan con un advisory lock).
+- **Administrador** = usuario activo con rol activo y nivel **efectivo** 4 en todos los módulos (los overrides cuentan).
+- No puedes otorgar (por rol ni por override) permisos efectivos superiores a los tuyos, ni cambiar tus propios permisos. Ninguna operación (desactivar usuario, cambiar su rol, editar/desactivar un rol) puede dejar el sistema sin uno (`409 last_admin`; las operaciones se serializan con un advisory lock).
 - **Anti-escalada**: sólo se pueden asignar/crear roles cuyos permisos no superen los propios en ningún módulo; no se puede modificar a un usuario con más privilegios, ni el propio rol, ni el rol asignado a uno mismo; no se puede desactivar uno mismo.
 - Un rol con usuarios activos no puede desactivarse. Usuarios, roles y clientes se **desactivan** (no se borran); los tickets tienen **eliminación lógica** y conservan historial.
 - Responsables asignables: usuarios activos cuyo rol tiene `tickets ≥ Editar`.

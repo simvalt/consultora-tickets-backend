@@ -46,8 +46,9 @@ def assignable_users_sql() -> str:
     """Usuarios activos cuyo rol permite trabajar tickets (editar o más)."""
     return (
         "FROM users u JOIN roles r ON r.id = u.role_id AND r.is_active "
-        "JOIN role_permissions p ON p.role_id = r.id AND p.module = 'tickets' AND p.level >= 3 "
-        "WHERE u.is_active"
+        "WHERE u.is_active AND coalesce("
+        "(SELECT level FROM user_permissions WHERE user_id = u.id AND module = 'tickets'), "
+        "(SELECT level FROM role_permissions WHERE role_id = r.id AND module = 'tickets'), 0) >= 3"
     )
 
 

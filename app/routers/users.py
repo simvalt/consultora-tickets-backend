@@ -39,7 +39,9 @@ def list_users(
     _: CurrentUser = Depends(require("users", Level.READ)),
     conn: Connection = Depends(get_db),
 ):
-    return fetch_page(conn, repo.COLS, repo.FROM, f.where, f.binds, f.order, p)
+    page = fetch_page(conn, repo.COLS, repo.FROM, f.where, f.binds, f.order, p)
+    service.attach(conn, page["items"])
+    return page
 
 
 @router.get("/export", summary="Exportar usuarios a CSV (mismos filtros que el listado)")
@@ -59,7 +61,7 @@ def get_user(
     user = repo.get(conn, user_id)
     if not user:
         raise not_found("El usuario no existe.")
-    return user
+    return service.attach(conn, [user])[0]
 
 
 @router.post("", response_model=UserOut, status_code=201, summary="Crear usuario")

@@ -4,7 +4,7 @@ from typing import Annotated, Generic, Literal, TypeVar
 
 from pydantic import BaseModel, Field, StringConstraints, field_validator
 
-from app.permissions import MODULES
+from app.permissions import parse_permissions
 
 Email = Annotated[
     str,
@@ -58,6 +58,8 @@ class UserOut(BaseModel):
     full_name: str
     role_id: int
     role_name: str
+    permissions: dict[str, int] = Field(default_factory=dict)  # efectivos (rol + overrides)
+    permission_overrides: dict[str, int] = Field(default_factory=dict)  # sólo los propios del usuario
     is_active: bool
     created_at: datetime
     updated_at: datetime
@@ -69,6 +71,12 @@ class UserCreate(BaseModel):
     full_name: Name
     password: Password
     role_id: int
+    permission_overrides: dict[str, int | str] = Field(default_factory=dict)
+
+    @field_validator("permission_overrides")
+    @classmethod
+    def _perm(cls, v: dict) -> dict[str, int]:
+        return _check_permissions(v)
 
 
 class UserUpdate(BaseModel):
@@ -76,16 +84,19 @@ class UserUpdate(BaseModel):
     full_name: Name | None = None
     password: Password | None = None
     role_id: int | None = None
+    # None = sin cambios; {} = quitar todos los overrides; si se envía, REEMPLAZA los overrides actuales.
+    permission_overrides: dict[str, int | str] | None = None
+
+    @field_validator("permission_overrides")
+    @classmethod
+    def _perm(cls, v: dict | None) -> dict[str, int] | None:
+        return None if v is None else _check_permissions(v)
 
 
 # ---------------------------------------------------------------- roles
-def _check_permissions(v: dict[str, int]) -> dict[str, int]:
-    for module, level in v.items():
-        if module not in MODULES:
-            raise ValueError(f"Módulo desconocido: {module}")
-        if not 0 <= level <= 4:
-            raise ValueError("El nivel debe estar entre 0 y 4")
-    return v
+def _check_permissions(v: dict) -> dict[str, int]:
+    """Acepta niveles numéricos o por nombre (leer, crear, editar...) y alias de módulo; devuelve {módulo: nivel}."""
+    return parse_permissions(v)
 
 
 class RoleOut(BaseModel):
@@ -102,22 +113,22 @@ class RoleOut(BaseModel):
 class RoleCreate(BaseModel):
     name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)]
     description: Annotated[str, StringConstraints(strip_whitespace=True, max_length=255)] = ""
-    permissions: dict[str, int] = Field(default_factory=dict)
+    permissions: dict[str, int | str] = Field(default_factory=dict)
 
     @field_validator("permissions")
     @classmethod
-    def _perm(cls, v: dict[str, int]) -> dict[str, int]:
+    def _perm(cls, v: dict) -> dict[str, int]:
         return _check_permissions(v)
 
 
 class RoleUpdate(BaseModel):
     name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)] | None = None
     description: Annotated[str, StringConstraints(strip_whitespace=True, max_length=255)] | None = None
-    permissions: dict[str, int] | None = None
+    permissions: dict[str, int | str] | None = None
 
     @field_validator("permissions")
     @classmethod
-    def _perm(cls, v: dict[str, int] | None) -> dict[str, int] | None:
+    def _perm(cls, v: dict | None) -> dict[str, int] | None:
         return None if v is None else _check_permissions(v)
 
 
@@ -269,3 +280,7 @@ class DashboardOut(BaseModel):
 class LookupItem(BaseModel):
     id: int
     name: str
+
+
+class RoleLookup(LookupItem):
+    permissions: dict[str, int]

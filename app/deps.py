@@ -6,7 +6,7 @@ from sqlalchemy import Connection, text
 
 from app.db import get_db
 from app.errors import forbidden
-from app.permissions import MODULES, Level, is_full_access
+from app.permissions import MODULES, Level, effective, is_full_access
 from app.security import decode_access_token
 
 bearer = HTTPBearer(auto_error=False, description="Access token JWT obtenido en /api/auth/login")
@@ -33,11 +33,21 @@ def _unauthorized() -> HTTPException:
     return HTTPException(401, "Sesión no válida o expirada.", headers={"WWW-Authenticate": "Bearer"})
 
 
-def load_permissions(conn: Connection, role_id: int) -> dict[str, int]:
+def load_role_permissions(conn: Connection, role_id: int) -> dict[str, int]:
     rows = conn.execute(text("SELECT module, level FROM role_permissions WHERE role_id=:r"), {"r": role_id}).all()
     perms = {m: 0 for m in MODULES}
     perms.update({m: lvl for m, lvl in rows})
     return perms
+
+
+def load_overrides(conn: Connection, user_id: int) -> dict[str, int]:
+    rows = conn.execute(text("SELECT module, level FROM user_permissions WHERE user_id=:u"), {"u": user_id}).all()
+    return {m: lvl for m, lvl in rows}
+
+
+def load_permissions(conn: Connection, role_id: int, user_id: int) -> dict[str, int]:
+    """Permisos efectivos = rol con los overrides del usuario encima (por módulo)."""
+    return effective(load_role_permissions(conn, role_id), load_overrides(conn, user_id))
 
 
 def get_current_user(
@@ -59,7 +69,7 @@ def get_current_user(
     ).mappings().first()
     if row is None:
         raise _unauthorized()
-    return CurrentUser(**row, permissions=load_permissions(conn, row["role_id"]))
+    return CurrentUser(**row, permissions=load_permissions(conn, row["role_id"], row["id"]))
 
 
 def require(module: str, level: Level):

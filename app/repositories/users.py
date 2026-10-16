@@ -75,11 +75,33 @@ def count_active_admins(conn: Connection) -> int:
     return conn.execute(
         text(
             "SELECT count(*) FROM users u JOIN roles r ON r.id = u.role_id AND r.is_active "
-            "WHERE u.is_active AND (SELECT count(*) FROM role_permissions p "
-            "WHERE p.role_id = r.id AND p.level = 4) = :n"
+            "WHERE u.is_active AND (SELECT count(*) FROM unnest(CAST(:modules AS text[])) AS m "
+            "WHERE coalesce((SELECT level FROM user_permissions WHERE user_id = u.id AND module = m), "
+            "(SELECT level FROM role_permissions WHERE role_id = r.id AND module = m), 0) = 4) = :n"
         ),
-        {"n": len(MODULES)},
+        {"modules": list(MODULES), "n": len(MODULES)},
     ).scalar_one()
+
+
+def overrides_for(conn: Connection, user_ids: list[int]) -> dict[int, dict[str, int]]:
+    result: dict[int, dict[str, int]] = {uid: {} for uid in user_ids}
+    if user_ids:
+        rows = conn.execute(
+            text("SELECT user_id, module, level FROM user_permissions WHERE user_id = ANY(:ids)"), {"ids": user_ids}
+        ).all()
+        for uid, module, level in rows:
+            result[uid][module] = level
+    return result
+
+
+def set_overrides(conn: Connection, user_id: int, overrides: dict[str, int]) -> None:
+    """Reemplaza por completo los overrides del usuario."""
+    conn.execute(text("DELETE FROM user_permissions WHERE user_id = :u"), {"u": user_id})
+    for module, level in overrides.items():
+        conn.execute(
+            text("INSERT INTO user_permissions (user_id, module, level) VALUES (:u, :m, :l)"),
+            {"u": user_id, "m": module, "l": level},
+        )
 
 
 def lock_admin_changes(conn: Connection) -> None:

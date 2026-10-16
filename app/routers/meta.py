@@ -7,7 +7,8 @@ from app.db import get_db
 from app.deps import CurrentUser, get_current_user
 from app.errors import forbidden
 from app.permissions import LEVEL_LABELS, MODULE_LABELS, MODULES, Level
-from app.schemas import LookupItem
+from app.repositories import roles as roles_repo
+from app.schemas import LookupItem, RoleLookup
 from app.services.tickets import assignable_users_sql
 
 router = APIRouter(tags=["Catálogos"])
@@ -36,12 +37,14 @@ def lookup_clients(user: CurrentUser = Depends(get_current_user), conn: Connecti
     return [dict(r) for r in rows]
 
 
-@router.get("/lookups/roles", response_model=list[LookupItem], summary="Roles activos (para formularios)")
+@router.get("/lookups/roles", response_model=list[RoleLookup], summary="Roles activos con sus permisos (formularios)")
 def lookup_roles(user: CurrentUser = Depends(get_current_user), conn: Connection = Depends(get_db)):
     if user.level("users") < Level.READ and user.level("roles") < Level.READ:
         raise forbidden()
     rows = conn.execute(text("SELECT id, name FROM roles WHERE is_active ORDER BY lower(name)")).mappings().all()
-    return [dict(r) for r in rows]
+    roles = [dict(r) for r in rows]
+    perms = roles_repo.permissions_for(conn, [r["id"] for r in roles])
+    return [{**r, "permissions": perms[r["id"]]} for r in roles]
 
 
 @router.get("/lookups/assignees", response_model=list[LookupItem], summary="Usuarios que pueden atender tickets")

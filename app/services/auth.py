@@ -48,7 +48,7 @@ limiter = LoginRateLimiter()
 def _me(conn: Connection, row) -> dict:
     return {
         "id": row["id"], "email": row["email"], "full_name": row["full_name"], "role_id": row["role_id"],
-        "role_name": row["role_name"], "permissions": load_permissions(conn, row["role_id"]),
+        "role_name": row["role_name"], "permissions": load_permissions(conn, row["role_id"], row["id"]),
     }
 
 
