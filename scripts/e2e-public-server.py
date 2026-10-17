@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 """E2E contra la demo publicada, en un navegador efimero sin acceder a otros servicios."""
+import fcntl
 import os
 import ssl
 import subprocess
@@ -8,6 +9,9 @@ import urllib.request
 from pathlib import Path
 
 root = Path('/home/simonvalt/tickets-demo')
+# La demo no se sustituye a mitad de la navegacion; solo bloquea deploys de Tickets.
+deployment_lock = (root / 'state/deploy.lock').open('a')
+fcntl.flock(deployment_lock, fcntl.LOCK_SH)
 url = 'https://tickets.sivalt.com'
 try:
     request = urllib.request.Request(url, headers={'User-Agent': 'Tickets-Deployment-Check/1.0'})
