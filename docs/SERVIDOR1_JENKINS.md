@@ -18,7 +18,7 @@
 | Respaldos previos a actualizar | `state/backups/*.dump` (0600) |
 | Proyecto Firebase nuevo | `sivalt-tickets-demo` (Spark) |
 | Identidad Hosting nueva | `jenkins-tickets-hosting@sivalt-tickets-demo.iam.gserviceaccount.com` |
-| Tunel nuevo, pendiente de configurar | `tickets-demo`, exclusivamente para `tickets-api.sivalt.com` |
+| Tunel nuevo | `tickets-demo` (`bd996162-c96e-487b-8c8e-96a6bc1de4a0`), exclusivamente para `tickets-api.sivalt.com` |
 | Jobs nuevos | `Tickets-backend`, `Tickets-database`, `Tickets-frontend` |
 | Permiso NUEVO para Jenkins | `/etc/sudoers.d/tickets-demo` |
 
@@ -63,11 +63,13 @@ https://jenkins.sivalt.com/job/Tickets-frontend/
 
 `scripts/firebase-wif.mjs` genera una configuracion efimera fuera del repo; Firebase se ejecuta con `--project sivalt-tickets-demo --only hosting`. No se reutilizan identidades, tokens ni permisos de despliegue de Didaxis o SimFin. No generar una clave JSON de cuenta de servicio. No usar `FIREBASE_TOKEN`.
 
-## Publicacion pendiente: SOLO registros nuevos
+## Publicacion: SOLO registros nuevos
 
 - Firebase: agregar `tickets.sivalt.com` al sitio nuevo y copiar exactamente los registros de verificacion y destino que indique Firebase. Agregar solo registros para ese subdominio; no cambiar registros actuales. El registro de Hosting debe ser **solo DNS** (nube gris).
 - Cloudflare: crear el tunel **nuevo** `tickets-demo`; guardar su token en la variable `CLOUDFLARE_TUNNEL_TOKEN` de `state/runtime.env` sin mostrarlo. Ruta publica nueva: `tickets-api.sivalt.com` -> `http://backend:8000`. No agregar rutas al tunel `servidor1`.
 - Con `BACKEND_REF` y `DATABASE_REF` de `state/release.env`, iniciar exclusivamente `cloudflared` usando `deploy/compose.server.yml`, el mismo proyecto y `--profile public --no-deps`. No reiniciar la API ni servicios anteriores para publicar el tunel.
+- En esta instalacion se uso `scripts/connect-tunnel.py --tunnel-id bd996162-c96e-487b-8c8e-96a6bc1de4a0 --token-file /home/simonvalt/tickets-demo/state/new-tunnel.token`. Valida que el token corresponda al nuevo ID y rechaza explicitamente el tunel anterior `servidor1`. El archivo de transferencia se elimina despues de conectar; el token permanece solo en `state/runtime.env`.
+- Verificacion operativa sin exponer credenciales: `python3 scripts/smoke-server.py` (red interna) o `python3 scripts/smoke-server.py --public` (HTTPS real, validando el certificado). Comprueba login, renovacion, logout, CORS, cookie segura y docs ocultos. No usa `--insecure` ni desactiva TLS.
 - Verificar salud publica, login, renovacion y logout; CORS permitido para `https://tickets.sivalt.com` y denegado para otro origen; cookie `HttpOnly; Secure; SameSite=Lax`; docs 404; CSP, `no-store` de rutas/config y cache de bundles. Ejecutar el flujo E2E contra los dominios finales con credenciales privadas (genera registros QA).
 
 ## Actualizaciones y recuperacion

@@ -1,10 +1,14 @@
 #!/usr/bin/env python3
 """Verificar la demo sin imprimir contrasenas, cookies ni tokens."""
+import argparse
 import json
 import subprocess
 from pathlib import Path
 
 root = Path('/home/simonvalt/tickets-demo')
+parser = argparse.ArgumentParser(description=__doc__)
+parser.add_argument('--public', action='store_true', help='Verificar HTTPS a traves del tunel nuevo')
+args = parser.parse_args()
 values = dict(line.split('=', 1) for line in (root / 'state/runtime.env').read_text().splitlines() if '=' in line)
 check = r'''
 import json
@@ -13,10 +17,11 @@ import urllib.error
 import urllib.request
 
 credentials = json.load(sys.stdin)
-base = 'http://127.0.0.1:8000/api'
+base = credentials.pop('_api_url')
 
 def request(path, method='GET', body=None, headers=None):
-    req = urllib.request.Request(base + path, method=method, headers=headers or {},
+    req = urllib.request.Request(base + path, method=method,
+        headers={'User-Agent': 'Tickets-Deployment-Check/1.0', **(headers or {})},
         data=json.dumps(body).encode() if body is not None else (b'' if method == 'POST' else None))
     if body is not None:
         req.add_header('Content-Type', 'application/json')
@@ -26,7 +31,7 @@ def request(path, method='GET', body=None, headers=None):
         response = error
     return response.status, response.headers, response.read()
 
-assert request('/health')[0] == 200
+assert request('/health')[0] == 200, 'salud publica'
 for path in ('/docs', '/openapi.json'):
     assert request(path)[0] == 404, path
 for origin, expected in [('https://tickets.sivalt.com', 200), ('https://example.org', 400)]:
@@ -54,4 +59,7 @@ print('OK: salud, CORS permitido/denegado, cookie segura, login, refresh, logout
 '''
 subprocess.run([
     'docker', 'exec', '-i', 'consultora-tickets-demo-backend-1', 'python', '-c', check,
-], input=json.dumps({'email': values['ADMIN_EMAIL'], 'password': values['ADMIN_PASSWORD']}), text=True, check=True)
+], input=json.dumps({
+    'email': values['ADMIN_EMAIL'], 'password': values['ADMIN_PASSWORD'],
+    '_api_url': 'https://tickets-api.sivalt.com/api' if args.public else 'http://127.0.0.1:8000/api',
+}), text=True, check=True)
