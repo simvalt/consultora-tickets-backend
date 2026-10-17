@@ -4,7 +4,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import Connection
 
-from app.csvutil import csv_response
+from app.csvutil import COLUMNS_QUERY, Column, columns_response, pick_columns
 from app.db import DB, get_engine
 from app.deps import CurrentUser, require
 from app.permissions import Level
@@ -28,6 +28,25 @@ from app.services import tickets as service
 from app.workflow import PRIORITY_LABELS, STATUS_LABELS
 
 router = APIRouter(prefix="/tickets", tags=["Tickets"])
+
+# Claves = las de la tabla del frontend. El usuario elige cuáles y en qué orden (mismo orden en el CSV).
+EXPORT_COLUMNS: dict[str, Column] = {
+    "folio": ("Folio", lambda r: r["folio"]),
+    "title": ("Título", lambda r: r["title"]),
+    "description": ("Descripción", lambda r: r["description"]),
+    "client": ("Cliente", lambda r: r["client_name"]),
+    "category": ("Categoría", lambda r: r["category_name"]),
+    "priority": ("Prioridad", lambda r: PRIORITY_LABELS[r["priority"]]),
+    "status": ("Estatus", lambda r: STATUS_LABELS[r["status"]]),
+    "created_by": ("Creado por", lambda r: r["created_by_name"]),
+    "assignee": ("Responsable", lambda r: r["assignee_name"]),
+    "created_at": ("Creado", lambda r: r["created_at"]),
+    "updated_at": ("Modificado", lambda r: r["updated_at"]),
+    "started_at": ("Inicio de atención", lambda r: r["started_at"]),
+    "closed_at": ("Cierre", lambda r: r["closed_at"]),
+    "due_at": ("Vencimiento", lambda r: r["due_at"]),
+    "resolution": ("Resolución", lambda r: r["resolution"]),
+}
 SortField = Literal[
     "folio", "title", "client", "category", "priority", "status", "assignee", "created_at", "updated_at", "due_at"
 ]
@@ -74,18 +93,12 @@ def list_tickets(
 
 
 @router.get("/export", summary="Exportar a CSV todos los tickets que coinciden con los filtros")
-def export_tickets(f: TicketQuery = Depends(), _: CurrentUser = Depends(require("tickets", Level.READ))):
-    headers = [
-        "Folio", "Título", "Descripción", "Cliente", "Categoría", "Prioridad", "Estatus", "Creado por",
-        "Responsable", "Creado", "Modificado", "Inicio de atención", "Cierre", "Vencimiento", "Resolución",
-    ]
-    rows = (
-        [r["folio"], r["title"], r["description"], r["client_name"], r["category_name"],
-         PRIORITY_LABELS[r["priority"]], STATUS_LABELS[r["status"]], r["created_by_name"], r["assignee_name"],
-         r["created_at"], r["updated_at"], r["started_at"], r["closed_at"], r["due_at"], r["resolution"]]
-        for r in stream_rows(get_engine(), repo.COLS, repo.FROM, f.where, f.binds, f.order)
-    )
-    return csv_response("tickets", headers, rows)
+def export_tickets(
+    f: TicketQuery = Depends(), columns: list[str] = COLUMNS_QUERY,
+    _: CurrentUser = Depends(require("tickets", Level.READ)),
+):
+    cols = pick_columns(EXPORT_COLUMNS, columns)
+    return columns_response("tickets", cols, stream_rows(get_engine(), repo.COLS, repo.FROM, f.where, f.binds, f.order))
 
 
 @router.post("", response_model=TicketDetail, status_code=201, summary="Crear ticket")

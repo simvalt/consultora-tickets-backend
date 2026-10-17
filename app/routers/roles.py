@@ -3,7 +3,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import Connection
 
-from app.csvutil import csv_response
+from app.csvutil import COLUMNS_QUERY, Column, columns_response, pick_columns
 from app.db import DB, get_engine
 from app.deps import CurrentUser, require
 from app.errors import not_found
@@ -14,6 +14,19 @@ from app.schemas import Page, RoleCreate, RoleOut, RoleUpdate
 from app.services import roles as service
 
 router = APIRouter(prefix="/roles", tags=["Roles y permisos"])
+
+
+def _level(module: str):
+    return lambda r: LEVEL_LABELS[r["permissions"][module]]
+
+
+EXPORT_COLUMNS: dict[str, Column] = {
+    "name": ("Rol", lambda r: r["name"]),
+    "description": ("Descripción", lambda r: r["description"]),
+    **{m: (MODULE_LABELS[m], _level(m)) for m in MODULES},
+    "user_count": ("Usuarios", lambda r: r["user_count"]),
+    "is_active": ("Activo", lambda r: r["is_active"]),
+}
 SortField = Literal["name", "is_active", "created_at", "user_count"]
 
 
@@ -43,18 +56,13 @@ def list_roles(
 
 @router.get("/export", summary="Exportar roles y permisos a CSV (mismos filtros que el listado)")
 def export_roles(
-    f: RoleQuery = Depends(), _: CurrentUser = Depends(require("roles", Level.READ)),
-    conn: Connection = DB,
+    f: RoleQuery = Depends(), columns: list[str] = COLUMNS_QUERY,
+    _: CurrentUser = Depends(require("roles", Level.READ)), conn: Connection = DB,
 ):
-    headers = ["Rol", "Descripción", "Activo", "Usuarios", *[MODULE_LABELS[m] for m in MODULES]]
+    cols = pick_columns(EXPORT_COLUMNS, columns)
     items = list(stream_rows(get_engine(), repo.COLS, repo.FROM, f.where, f.binds, f.order))
-    perms = repo.permissions_for(conn, [r["id"] for r in items])
-    rows = (
-        [r["name"], r["description"], r["is_active"], r["user_count"],
-         *[LEVEL_LABELS[perms[r["id"]][m]] for m in MODULES]]
-        for r in items
-    )
-    return csv_response("roles", headers, rows)
+    repo.attach_permissions(conn, items)
+    return columns_response("roles", cols, items)
 
 
 @router.get("/{role_id}", response_model=RoleOut, summary="Detalle de rol")

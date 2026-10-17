@@ -3,7 +3,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import Connection
 
-from app.csvutil import csv_response
+from app.csvutil import COLUMNS_QUERY, Column, columns_response, pick_columns
 from app.db import DB, get_engine
 from app.deps import CurrentUser, require
 from app.errors import not_found
@@ -14,6 +14,15 @@ from app.schemas import Page, UserCreate, UserOut, UserUpdate
 from app.services import users as service
 
 router = APIRouter(prefix="/users", tags=["Usuarios"])
+
+EXPORT_COLUMNS: dict[str, Column] = {  # nunca incluye hashes, tokens ni permisos internos
+    "full_name": ("Nombre", lambda r: r["full_name"]),
+    "email": ("Correo", lambda r: r["email"]),
+    "role": ("Rol", lambda r: r["role_name"]),
+    "is_active": ("Activo", lambda r: r["is_active"]),
+    "created_at": ("Creado", lambda r: r["created_at"]),
+    "last_login_at": ("Último acceso", lambda r: r["last_login_at"]),
+}
 SortField = Literal["full_name", "email", "role", "is_active", "created_at", "last_login_at"]
 
 
@@ -45,13 +54,12 @@ def list_users(
 
 
 @router.get("/export", summary="Exportar usuarios a CSV (mismos filtros que el listado)")
-def export_users(f: UserQuery = Depends(), _: CurrentUser = Depends(require("users", Level.READ))):
-    headers = ["Nombre", "Correo", "Rol", "Activo", "Creado", "Último acceso"]
-    rows = (
-        [r["full_name"], r["email"], r["role_name"], r["is_active"], r["created_at"], r["last_login_at"]]
-        for r in stream_rows(get_engine(), repo.COLS, repo.FROM, f.where, f.binds, f.order)
-    )
-    return csv_response("usuarios", headers, rows)
+def export_users(
+    f: UserQuery = Depends(), columns: list[str] = COLUMNS_QUERY,
+    _: CurrentUser = Depends(require("users", Level.READ)),
+):
+    cols = pick_columns(EXPORT_COLUMNS, columns)
+    return columns_response("usuarios", cols, stream_rows(get_engine(), repo.COLS, repo.FROM, f.where, f.binds, f.order))
 
 
 @router.get("/{user_id}", response_model=UserOut, summary="Detalle de usuario")

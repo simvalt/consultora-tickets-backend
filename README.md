@@ -91,7 +91,7 @@ Las pruebas usan un **PostgreSQL real**; el esquema se crea ejecutando las migra
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                      # 301 pruebas (usa la base tickets_test; se crea sola)
+pytest                      # 311 pruebas (usa la base tickets_test; se crea sola)
 pip-audit -r requirements.txt       # vulnerabilidades conocidas en dependencias
 python scripts/qa_performance.py   # prueba de carga: 200 000 tickets en la base tickets_perf
 ruff check .                # lint
@@ -175,11 +175,15 @@ Reglas adicionales (todas en el backend):
 
 ## CSV
 
-`GET /api/<módulo>/export` acepta **los mismos filtros y orden** que el listado y devuelve **todos** los registros coincidentes (sin paginar). Requiere nivel Leer. UTF-8 con BOM, CRLF, comillas/comas/saltos de línea escapados, y valores que empiezan con `= + - @` o tab/CR se prefijan con `'` (anti inyección de fórmulas). Fechas en ISO-8601 UTC. Columnas explícitas:
+`GET /api/<módulo>/export` acepta **los mismos filtros y orden** que el listado y devuelve **todos** los registros coincidentes (sin paginar). Requiere nivel Leer. UTF-8 con BOM, CRLF, comillas/comas/saltos de línea escapados, y valores que empiezan con `= + - @` o tab/CR se prefijan con `'` (anti inyección de fórmulas). Fechas en ISO-8601 UTC.
 
-- **tickets**: Folio, Título, Descripción, Cliente, Categoría, Prioridad, Estatus, Creado por, Responsable, Creado, Modificado, Inicio de atención, Cierre, Vencimiento, Resolución
-- **users**: Nombre, Correo, Rol, Activo, Creado, Último acceso (sin hashes ni tokens)
-- **roles**: Rol, Descripción, Activo, Usuarios, y un nivel por módulo · **clients**: Nombre, Contacto, Correo, Teléfono, Activo, Creado · **dashboard**: Sección, Elemento, Valor
+**Columnas elegidas por el usuario:** el parámetro repetible `columns=` indica qué columnas exportar y en qué orden, con las mismas claves que las tablas del frontend, por ejemplo `?columns=status&columns=folio&columns=title`. Sin `columns` se exportan todas en el orden por defecto. Una clave desconocida devuelve 422, así que nunca se puede pedir un campo que no esté en la lista blanca (hashes, tokens, etc.). Columnas disponibles (clave → encabezado):
+
+- **tickets**: `folio` Folio, `title` Título, `description` Descripción, `client` Cliente, `category` Categoría, `priority` Prioridad, `status` Estatus, `created_by` Creado por, `assignee` Responsable, `created_at` Creado, `updated_at` Modificado, `started_at` Inicio de atención, `closed_at` Cierre, `due_at` Vencimiento, `resolution` Resolución
+- **users**: `full_name`, `email`, `role`, `is_active`, `created_at`, `last_login_at` (sin hashes ni tokens)
+- **roles**: `name`, `description`, `tickets`, `users`, `roles`, `clients`, `dashboard` (nivel por módulo), `user_count`, `is_active`
+- **clients**: `name`, `contact_name`, `email`, `phone`, `is_active`, `created_at`
+- **dashboard**: Sección, Elemento, Valor (formato largo fijo)
 
 ## API
 

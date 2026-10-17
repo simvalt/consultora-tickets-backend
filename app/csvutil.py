@@ -1,9 +1,34 @@
 import csv
 import io
-from collections.abc import Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator
 from datetime import UTC, date, datetime
 
+from fastapi import Query
 from fastapi.responses import StreamingResponse
+
+from app.errors import AppError
+
+# Columna exportable: (encabezado legible, función que extrae el valor de la fila).
+Column = tuple[str, Callable[[dict], object]]
+
+COLUMNS_QUERY = Query(
+    default=[],
+    description="Claves de columna en el orden deseado (las mismas que muestra la tabla). Vacío = todas.",
+)
+
+
+def pick_columns(spec: dict[str, Column], requested: list[str]) -> list[Column]:
+    """Columnas a exportar en el orden pedido por el usuario; sin selección, todas en el orden por defecto."""
+    keys = list(dict.fromkeys(requested)) or list(spec)
+    unknown = [k for k in keys if k not in spec]
+    if unknown:
+        raise AppError(422, "validation_error", "Hay columnas de exportación desconocidas.",
+                       [{"field": "columns", "message": ", ".join(unknown)}])
+    return [spec[k] for k in keys]
+
+
+def columns_response(filename: str, columns: list[Column], rows: Iterable[dict]) -> StreamingResponse:
+    return csv_response(filename, [h for h, _ in columns], ([get(r) for _, get in columns] for r in rows))
 
 _DANGEROUS = "=+-@\t\r"  # primeros caracteres que una hoja de cálculo interpreta como fórmula
 

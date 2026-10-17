@@ -164,10 +164,10 @@ def test_users_export_excludes_secrets_and_follows_filters(client, world, login)
 def test_roles_and_clients_export(client, world, login):
     h = login("admin@test.local")
     roles = parse_csv(client.get("/api/roles/export", headers=h).text)
-    assert roles[0][:4] == ["Rol", "Descripción", "Activo", "Usuarios"] and roles[0][4:] == [
-        "Tickets", "Usuarios", "Roles y permisos", "Clientes", "Dashboard"]
+    assert roles[0] == ["Rol", "Descripción", "Tickets", "Usuarios", "Roles y permisos", "Clientes", "Dashboard",
+                        "Usuarios", "Activo"]
     admin_row = next(r for r in roles if r[0] == "Administrador")
-    assert admin_row[4:] == ["Eliminar"] * 5
+    assert admin_row[2:7] == ["Eliminar"] * 5
     clients = parse_csv(client.get("/api/clients/export", params={"q": "cliente"}, headers=h).text)
     assert clients[0][0] == "Nombre" and len(clients) == 2
 
@@ -178,3 +178,39 @@ def test_clients_listing_filters(client, world, make_client, login):
     assert client.get("/api/clients", params={"is_active": "false"}, headers=h).json()["total"] == 1
     assert client.get("/api/clients", params={"q": "dorm"}, headers=h).json()["total"] == 1
     assert client.get("/api/clients", headers=h).json()["total"] == 2
+
+
+# ------------------------------------------------ columnas elegidas por el usuario
+@pytest.mark.parametrize("path,columns,expected", [
+    ("/api/tickets/export", ["status", "folio", "title"], ["Estatus", "Folio", "Título"]),
+    ("/api/users/export", ["email", "full_name"], ["Correo", "Nombre"]),
+    ("/api/roles/export", ["dashboard", "name"], ["Dashboard", "Rol"]),
+    ("/api/clients/export", ["created_at", "name", "name"], ["Creado", "Nombre"]),  # duplicados se ignoran
+])
+def test_export_respects_selected_columns_and_order(client, world, make_ticket, login, path, columns, expected):
+    make_ticket(world["client"], world["admin"], title="Uno")
+    r = client.get(path, params={"columns": columns}, headers=login("admin@test.local"))
+    rows = parse_csv(r.text)
+    assert rows[0] == expected
+    assert all(len(row) == len(expected) for row in rows[1:])
+
+
+def test_export_selected_columns_values_follow_the_order(client, world, make_ticket, login):
+    make_ticket(world["client"], world["admin"], title="Orden", status="pendiente", assignee_id=world["agent1"])
+    rows = parse_csv(client.get("/api/tickets/export", params={"columns": ["assignee", "status", "title"]},
+                                headers=login("admin@test.local")).text)
+    assert rows[1] == ["Agente Uno", "Pendiente", "Orden"]
+
+
+@pytest.mark.parametrize("path", ["/api/tickets/export", "/api/users/export", "/api/roles/export", "/api/clients/export"])
+def test_export_rejects_unknown_columns(client, world, login, path):
+    r = client.get(path, params={"columns": ["name", "password_hash"]}, headers=login("admin@test.local"))
+    assert r.status_code == 422 and "password_hash" in r.json()["error"]["details"][0]["message"]
+
+
+def test_export_columns_combine_with_filters(client, world, data, login):
+    h = login("admin@test.local")
+    params = {"status": "cerrado", "sort": "folio", "order": "asc"}
+    listing, _ = all_pages(client, h, "/api/tickets", params)
+    rows = parse_csv(client.get("/api/tickets/export", params={**params, "columns": ["folio"]}, headers=h).text)
+    assert [r[0] for r in rows[1:]] == [t["folio"] for t in listing]

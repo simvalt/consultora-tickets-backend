@@ -3,7 +3,7 @@ from typing import Literal
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import Connection
 
-from app.csvutil import csv_response
+from app.csvutil import COLUMNS_QUERY, Column, columns_response, pick_columns
 from app.db import DB, get_engine
 from app.deps import CurrentUser, require
 from app.errors import not_found
@@ -14,6 +14,15 @@ from app.schemas import ClientCreate, ClientOut, ClientUpdate, Page
 from app.services import clients as service
 
 router = APIRouter(prefix="/clients", tags=["Clientes"])
+
+EXPORT_COLUMNS: dict[str, Column] = {
+    "name": ("Nombre", lambda r: r["name"]),
+    "contact_name": ("Contacto", lambda r: r["contact_name"]),
+    "email": ("Correo", lambda r: r["email"]),
+    "phone": ("Teléfono", lambda r: r["phone"]),
+    "is_active": ("Activo", lambda r: r["is_active"]),
+    "created_at": ("Creado", lambda r: r["created_at"]),
+}
 SortField = Literal["name", "contact_name", "email", "is_active", "created_at"]
 
 
@@ -40,13 +49,12 @@ def list_clients(
 
 
 @router.get("/export", summary="Exportar clientes a CSV (mismos filtros que el listado)")
-def export_clients(f: ClientQuery = Depends(), _: CurrentUser = Depends(require("clients", Level.READ))):
-    headers = ["Nombre", "Contacto", "Correo", "Teléfono", "Activo", "Creado"]
-    rows = (
-        [r["name"], r["contact_name"], r["email"], r["phone"], r["is_active"], r["created_at"]]
-        for r in stream_rows(get_engine(), repo.COLS, repo.FROM, f.where, f.binds, f.order)
-    )
-    return csv_response("clientes", headers, rows)
+def export_clients(
+    f: ClientQuery = Depends(), columns: list[str] = COLUMNS_QUERY,
+    _: CurrentUser = Depends(require("clients", Level.READ)),
+):
+    cols = pick_columns(EXPORT_COLUMNS, columns)
+    return columns_response("clientes", cols, stream_rows(get_engine(), repo.COLS, repo.FROM, f.where, f.binds, f.order))
 
 
 @router.get("/{client_id}", response_model=ClientOut, summary="Detalle de cliente")
