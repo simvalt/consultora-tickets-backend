@@ -1,0 +1,109 @@
+# Siempre usar --project-directory <repo backend> y --env-file <archivo privado>.
+# Ningun servicio usa redes, volumenes o puertos de otras aplicaciones.
+name: consultora-tickets-demo
+
+x-logging: &logging
+  driver: json-file
+  options:
+    max-size: "10m"
+    max-file: "3"
+
+x-database-url: &database-url postgresql://tickets:${POSTGRES_PASSWORD:?required}@db:5432/tickets
+
+services:
+  db:
+    image: postgres:16.15-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: tickets
+      POSTGRES_DB: tickets
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?required}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks: [data]
+    mem_limit: 768m
+    cpus: 1.0
+    pids_limit: 150
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U tickets -d tickets"]
+      interval: 5s
+      timeout: 3s
+      retries: 30
+
+  migrate:
+    image: consultora-tickets-migrate:${DATABASE_REF:?required}
+    build: ${DATABASE_REPO_PATH:-../consultora-tickets-database}
+    restart: "no"
+    environment:
+      DATABASE_URL: *database-url
+      APP_ENV: demo
+      PYTHONDONTWRITEBYTECODE: "1"
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?required}
+      ADMIN_NAME: ${ADMIN_NAME:-Administrador}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?required}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:?required}
+    command: [sh, -ec, "alembic upgrade head && python seed/seed.py base && python seed/seed.py demo"]
+    networks: [data]
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 100
+    read_only: true
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+
+  backend:
+    image: consultora-tickets-backend:${BACKEND_REF:?required}
+    build: .
+    restart: unless-stopped
+    environment:
+      APP_ENV: demo
+      DATABASE_URL: *database-url
+      JWT_SECRET: ${JWT_SECRET:?required}
+      COOKIE_SECURE: "true"
+      COOKIE_SAMESITE: lax
+      CORS_ORIGINS: https://tickets.sivalt.com
+      CLIENT_IP_HEADER: CF-Connecting-IP
+      DOCS_ENABLED: "false"
+    networks: [data, edge]
+    mem_limit: 512m
+    cpus: 1.0
+    pids_limit: 150
+    read_only: true
+    tmpfs: ["/tmp:size=64m,mode=1777"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+    healthcheck:
+      test: [CMD, python, -c, "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=3)"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+
+  cloudflared:
+    profiles: [public]
+    image: cloudflare/cloudflared:2026.9.1
+    restart: unless-stopped
+    command: [tunnel, --no-autoupdate, run]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:-}
+    networks: [edge]
+    mem_limit: 128m
+    cpus: 0.25
+    pids_limit: 100
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    logging: *logging
+
+networks:
+  data:
+    internal: true
+  edge:
+
+volumes:
+  pgdata:

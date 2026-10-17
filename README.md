@@ -187,6 +187,8 @@ OpenAPI interactivo en `/api/docs`. Errores uniformes: `{"error": {"code", "mess
 
 ## Demo publicada (Firebase + servidor propio + Cloudflare Tunnel)
 
+**Instalacion aislada en servidor1 y jobs de Jenkins: [docs/SERVIDOR1_JENKINS.md](docs/SERVIDOR1_JENKINS.md).** Usa `deploy/compose.server.yml`, limites propios y un tunel nuevo sin modificar Didaxis, SimFin ni otros servicios existentes.
+
 Guía paso a paso: **[docs/DESPLIEGUE_DEMO.md](docs/DESPLIEGUE_DEMO.md)**. El frontend se sirve en `https://tickets.sivalt.com` (Firebase Hosting) y la API en `https://tickets-api.sivalt.com`, a través del túnel definido en `docker-compose.demo.yml` (sin puertos abiertos en el servidor).
 
 Para este modo con dos orígenes:

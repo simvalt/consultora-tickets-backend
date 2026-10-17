@@ -1,5 +1,9 @@
 .venv
 .env
+.env.*
+!.env.example
+!.env.demo.example
+deploy
 tests
 __pycache__
 .pytest_cache
