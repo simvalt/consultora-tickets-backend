@@ -11,6 +11,7 @@ name: consultora-tickets
 services:
   db:
     image: postgres:16.15-bookworm
+    restart: unless-stopped  # vuelve a levantarse tras reiniciar el servidor o Docker
     environment:
       POSTGRES_USER: ${POSTGRES_USER:-tickets}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?define POSTGRES_PASSWORD en .env}

@@ -79,7 +79,8 @@ def db():
 
 @pytest.fixture
 def client():
-    with TestClient(app) as c:
+    # El frontend envía X-Requested-With en todas las llamadas (lo exigen /auth/refresh y /auth/logout).
+    with TestClient(app, headers={"X-Requested-With": "XMLHttpRequest"}) as c:
         yield c
 
 

@@ -19,7 +19,10 @@ class Settings(BaseSettings):
     login_max_attempts_ip: int = 20  # por IP, sumando todos los correos (credential stuffing)
     login_max_attempts_email: int = 10  # por correo, sumando todas las IPs (ataque distribuido)
     login_window_seconds: int = 300
-    docs_enabled: bool | None = None  # None = activados salvo en producción
+    docs_enabled: bool | None = None  # None = activados salvo en entornos expuestos (production/demo)
+    # Cabecera con la IP real del cliente puesta por el proxy de confianza (p. ej. CF-Connecting-IP con
+    # Cloudflare Tunnel). Vacío = IP de la conexión. Sólo debe definirse si el backend NO es accesible sin el proxy.
+    client_ip_header: str = ""
 
     @field_validator("database_url")
     @classmethod
@@ -32,15 +35,15 @@ class Settings(BaseSettings):
 
     @model_validator(mode="after")
     def _production_guards(self) -> "Settings":
-        """Impide arrancar en producción con valores inseguros de ejemplo."""
-        if self.is_production:
+        """Impide arrancar expuesto a internet (production o demo) con valores inseguros de ejemplo."""
+        if self.is_exposed:
             problems = []
             if "change-me" in self.jwt_secret or "change_me" in self.jwt_secret:
                 problems.append("JWT_SECRET es el valor de ejemplo")
             if not self.cookie_secure:
                 problems.append("COOKIE_SECURE debe ser true (HTTPS)")
             if problems:
-                raise ValueError("Configuración insegura para producción: " + "; ".join(problems))
+                raise ValueError(f"Configuración insegura para APP_ENV={self.app_env}: " + "; ".join(problems))
         return self
 
     @property
@@ -48,8 +51,13 @@ class Settings(BaseSettings):
         return self.app_env.strip().lower() == "production"
 
     @property
+    def is_exposed(self) -> bool:
+        """production y demo se publican en internet: mismas protecciones; sólo «demo» admite datos demo."""
+        return self.app_env.strip().lower() in ("production", "demo")
+
+    @property
     def show_docs(self) -> bool:
-        return (not self.is_production) if self.docs_enabled is None else self.docs_enabled
+        return (not self.is_exposed) if self.docs_enabled is None else self.docs_enabled
 
     @property
     def cors_list(self) -> list[str]:

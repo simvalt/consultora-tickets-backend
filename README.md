@@ -82,6 +82,8 @@ Ver `.env.example` (comentado). Las del backend:
 
 Con `APP_ENV=production` el backend **no arranca** si `JWT_SECRET` es el de ejemplo o `COOKIE_SECURE=false`.
 | `FORWARDED_ALLOW_IPS` | Proxies de confianza para `X-Forwarded-*` |
+| `CLIENT_IP_HEADER` | Cabecera con la IP real puesta por el proxy (p. ej. `CF-Connecting-IP` detrás de Cloudflare Tunnel). Vacío = IP de la conexión |
+| `APP_ENV` | `local` · `demo` (publicado con datos demo: mismas protecciones que producción) · `production` |
 
 ## Pruebas, lint y compilación
 
@@ -89,7 +91,7 @@ Las pruebas usan un **PostgreSQL real**; el esquema se crea ejecutando las migra
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                      # 297 pruebas (usa la base tickets_test; se crea sola)
+pytest                      # 301 pruebas (usa la base tickets_test; se crea sola)
 pip-audit -r requirements.txt       # vulnerabilidades conocidas en dependencias
 python scripts/qa_performance.py   # prueba de carga: 200 000 tickets en la base tickets_perf
 ruff check .                # lint
@@ -182,6 +184,15 @@ Reglas adicionales (todas en el backend):
 ## API
 
 OpenAPI interactivo en `/api/docs`. Errores uniformes: `{"error": {"code", "message", "details"}}` (sin trazas). Resumen: `/api/auth/{login,refresh,logout,me}`, `/api/{users,roles,clients}` (CRUD + `/export` + `/{id}/activate`), `/api/tickets` (+ `/export`, `/{id}/assign`, `/{id}/status`, `/{id}/comments`, `/{id}/events`), `/api/dashboard` (+ `/export`), `/api/meta`, `/api/lookups/*`, `/api/health`.
+
+## Demo publicada (Firebase + servidor propio + Cloudflare Tunnel)
+
+Guía paso a paso: **[docs/DESPLIEGUE_DEMO.md](docs/DESPLIEGUE_DEMO.md)**. El frontend se sirve en `https://tickets.sivalt.com` (Firebase Hosting) y la API en `https://tickets-api.sivalt.com`, a través del túnel definido en `docker-compose.demo.yml` (sin puertos abiertos en el servidor).
+
+Para este modo con dos orígenes:
+- CORS admite credenciales para `CORS_ORIGINS`.
+- La cookie de sesión no es de terceros, porque ambos subdominios son del mismo sitio.
+- `/auth/refresh` y `/auth/logout` exigen la cabecera `X-Requested-With`, contra peticiones forjadas desde otras páginas, incluidos otros subdominios.
 
 ## Preparación para despliegue (Cloudflare / HTTPS)
 

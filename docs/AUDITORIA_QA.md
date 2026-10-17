@@ -76,7 +76,7 @@ Sin cambios (adecuado para el volumen):
 | Backend: **seguridad** (`test_qa_security.py`): 9 tipos de token inválido, payload manipulado, rol inactivo, cambio y restablecimiento de contraseña, 3 límites de intentos y memoria acotada, NUL en cuerpo y query, asignación masiva (6 casos), 7 cargas de inyección, 8 parámetros malformados, XSS almacenado, IDs fuera de rango, tamaños máximos, JSON roto, cabeceras, cookie, configuración de producción, CORS y fuga de trazas | 61 | ✅ |
 | Backend: **casos límite** (`test_qa_edge.py`): 10 órdenes × 2 direcciones paginando sin huecos ni duplicados, CSV de 1 203 filas (cruza bloques de 500), unicode/emoji, folio parcial, límites de fechas UTC, vencimiento sin zona, responsable inactivo, ticket eliminado invisible en 7 rutas, matriz de parámetros del dashboard, coherencia dashboard ↔ listado, reapertura y doble cierre, permisos aplicados sin re-login | 47 | ✅ |
 | Backend: **concurrencia** (`test_qa_concurrency.py`): 8 cambios de estatus simultáneos (gana 1), dos admins desactivándose a la vez (queda ≥ 1), 10 altas con nombre duplicado (ningún 500), 20 comentarios, 6 renovaciones con el mismo refresh (rota 1), 25 folios únicos | 6 | ✅ |
-| **Total backend** | **297** | ✅ (≈4 min) |
+| **Total backend** | **301** (+4 del modo demo) | ✅ (≈4 min) |
 | Frontend: unitarias (Vitest): auth e interceptor, guards, `PagedList`, utilidades, editor de permisos matriz/JSON, `safeReturnUrl` (8 casos), cambio de contraseña, flujo principal por componentes | 46 | ✅ |
 | Frontend: **E2E** (Playwright, stack Docker real con datos demo limpios): flujo principal; sesión (recarga, logout + atrás, cookie borrada, `returnUrl` interno y externo, Enter, validaciones, usuario inactivo, menú por rol); tickets (crear y editar, rechazo, reapertura, eliminar con cancelar y confirmar, filtros, orden, paginación, vacío, CSV con BOM igual al filtro); administración (cliente duplicado y desactivación, rol por JSON → usuario nuevo → acceso, propio rol y usuario protegidos, cambio de contraseña); dashboard (filtros, vacío); móvil 375 px sin desplazamiento horizontal | 23 | ✅ |
 | Migraciones | `upgrade` → `downgrade base` → `upgrade` (0001–0004) en BD nueva; seeds idempotentes; seed demo bloqueado con `APP_ENV=production` y contraseña corta | ✅ |
@@ -101,12 +101,25 @@ Sin cambios (adecuado para el volumen):
 | Precisión de 1 s al invalidar tokens tras un cambio de contraseña. | Aceptable; podría usarse un `jti` o una versión de token. |
 | TypeScript 7 disponible; se mantiene 6.0 por compatibilidad con Angular 22. | Actualizar cuando Angular lo soporte. |
 
+## Revisión del despliegue de la demo (Firebase + Cloudflare Tunnel)
+
+| ID | Sev. | Hallazgo | Corrección |
+|---|---|---|---|
+| D-01 | Alta | Con el frontend en Firebase y la API en otro origen, la cookie de sesión no viajaba: el navegador no la envía sin `withCredentials`, y si fuera de terceros la bloquearían Safari y Firefox. | Subdominios del mismo sitio (`tickets.` y `tickets-api.sivalt.com`), CORS con credenciales y `withCredentials` sólo hacia la API. Probado con el emulador de Hosting en otro origen: 23/23 E2E. |
+| D-02 | Media | Detrás del túnel todos los visitantes comparten la IP de cloudflared (el límite de login bloquearía a todos), y `X-Forwarded-For` puede falsearse. | `CLIENT_IP_HEADER=CF-Connecting-IP`, con prueba incluida. |
+| D-03 | Media | Con dos orígenes, `/auth/refresh` y `/auth/logout` (sólo cookie) quedaban expuestos a peticiones forjadas desde otros subdominios. | Cabecera `X-Requested-With` obligatoria (fuerza *preflight* CORS), con prueba incluida. |
+| D-04 | Media | Las credenciales demo publicadas en el README servirían en la demo pública. | Los seeds rechazan las contraseñas de ejemplo fuera de `APP_ENV=local`. |
+| D-05 | Media | El contenedor `db` no tenía política `restart`: tras reiniciar Docker la BD no volvía y el backend quedaba *unhealthy*. Se observó durante esta revisión. | `restart: unless-stopped` en todos los servicios persistentes. |
+| D-06 | Baja | La demo necesita datos demo, pero `APP_ENV=production` los prohíbe y `local` relaja las protecciones. | Nuevo `APP_ENV=demo`: mismas protecciones que producción y admite datos demo. |
+
+Nota: el emulador de Hosting de Firebase no aplica las cabeceras de `firebase.json`. Las reglas se validaron con el motor de coincidencia de Firebase (superstatic/minimatch) y deben comprobarse tras el despliegue con los `curl` de la guía.
+
 ## Cómo reproducir
 
 ```bash
 # backend (con la BD del compose arriba)
 pip install -r requirements-dev.txt
-pytest                                    # 297 pruebas
+pytest                                    # 301 pruebas
 ruff check . && pip-audit -r requirements.txt
 python scripts/qa_performance.py          # carga de 200 000 tickets en la BD tickets_perf y medición
 # frontend

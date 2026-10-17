@@ -1,0 +1,85 @@
+# Demo pública: backend en este servidor, publicado SÓLO a través de Cloudflare Tunnel.
+# El frontend se despliega en Firebase Hosting (ver docs/DESPLIEGUE_DEMO.md).
+#
+#   https://tickets.sivalt.com      → Firebase Hosting (Angular)
+#   https://tickets-api.sivalt.com  → Cloudflare Tunnel → backend:8000 (este compose)
+#
+# Uso:   cp .env.demo.example .env.demo   (rellenar secretos)
+#        docker compose -f docker-compose.demo.yml --env-file .env.demo up -d --build
+#
+# No se publica ningún puerto en el servidor: cloudflared abre una conexión saliente hacia Cloudflare.
+name: consultora-tickets-demo
+
+x-db-url: &db-url postgresql://${POSTGRES_USER:-tickets}:${POSTGRES_PASSWORD:?define POSTGRES_PASSWORD}@db:5432/${POSTGRES_DB:-tickets}
+
+services:
+  db:
+    image: postgres:16.15-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-tickets}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?define POSTGRES_PASSWORD}
+      POSTGRES_DB: ${POSTGRES_DB:-tickets}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+  migrate:
+    build: ${DATABASE_REPO_PATH:-../consultora-tickets-database}
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: "no"
+    environment:
+      DATABASE_URL: *db-url
+      APP_ENV: demo
+      ADMIN_EMAIL: ${ADMIN_EMAIL:?define ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?define ADMIN_PASSWORD}
+      ADMIN_NAME: ${ADMIN_NAME:-Administrador}
+      DEMO_PASSWORD: ${DEMO_PASSWORD:?define DEMO_PASSWORD}
+    # Migraciones + administrador + datos demo (idempotente: si ya hay tickets no vuelve a cargarlos).
+    # Los seeds rechazan las contraseñas de ejemplo publicadas en la documentación.
+    command: ["sh", "-c", "alembic upgrade head && python seed/seed.py base && python seed/seed.py demo"]
+
+  backend:
+    build: .
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+    environment:
+      APP_ENV: demo                      # mismas protecciones que producción, admite datos demo
+      DATABASE_URL: *db-url
+      JWT_SECRET: ${JWT_SECRET:?define JWT_SECRET}
+      COOKIE_SECURE: "true"              # HTTPS en Cloudflare
+      COOKIE_SAMESITE: lax               # app y API comparten sitio (sivalt.com): la cookie viaja sin ser de terceros
+      CORS_ORIGINS: ${CORS_ORIGINS:?define CORS_ORIGINS (origen del frontend en Firebase)}
+      CLIENT_IP_HEADER: CF-Connecting-IP # IP real del visitante (el backend sólo es alcanzable por el túnel)
+      DOCS_ENABLED: ${DOCS_ENABLED:-false}
+      LOGIN_MAX_ATTEMPTS: ${LOGIN_MAX_ATTEMPTS:-5}
+      LOGIN_MAX_ATTEMPTS_IP: ${LOGIN_MAX_ATTEMPTS_IP:-20}
+      LOGIN_MAX_ATTEMPTS_EMAIL: ${LOGIN_MAX_ATTEMPTS_EMAIL:-10}
+    # Sin «ports»: nadie llega al backend salvo cloudflared por la red interna de Docker.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health')"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  cloudflared:
+    image: cloudflare/cloudflared:2026.9.1
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    # El hostname público (tickets-api.sivalt.com → http://backend:8000) se configura en el panel de Cloudflare.
+    command: ["tunnel", "--no-autoupdate", "run"]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?define CLOUDFLARE_TUNNEL_TOKEN}
+
+volumes:
+  pgdata:

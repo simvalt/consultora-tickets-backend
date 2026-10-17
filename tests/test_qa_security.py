@@ -285,3 +285,49 @@ def test_errors_never_leak_internals(client, world, login):
               client.post("/api/tickets", json=[], headers=login("admin@test.local"))):
         assert "Traceback" not in r.text and "psycopg" not in r.text and "sqlalchemy" not in r.text.lower()
         assert set(r.json()) == {"error"}
+
+
+# ------------------------------------------------- despliegue (Firebase + Cloudflare Tunnel)
+def test_cookie_only_endpoints_require_csrf_header(world):
+    from app.main import app
+
+    with TestClient(app) as c:  # sin la cabecera por defecto del fixture
+        c.post("/api/auth/login", json={"email": "admin@test.local", "password": PASSWORD})
+        assert c.post("/api/auth/refresh").status_code == 403
+        assert c.post("/api/auth/logout").status_code == 403
+        ok = c.post("/api/auth/refresh", headers={"X-Requested-With": "XMLHttpRequest"})
+        assert ok.status_code == 200  # la sesión sigue viva: el intento sin cabecera no la tocó
+
+
+def test_client_ip_from_cloudflare_header_drives_rate_limit(client, world, monkeypatch):
+    monkeypatch.setattr(get_settings(), "client_ip_header", "CF-Connecting-IP")
+    for i in range(get_settings().login_max_attempts_ip):
+        client.post("/api/auth/login", json={"email": f"z{i}@t.local", "password": "x"},
+                    headers={"CF-Connecting-IP": "203.0.113.7"})
+    blocked = client.post("/api/auth/login", json={"email": "admin@test.local", "password": PASSWORD},
+                          headers={"CF-Connecting-IP": "203.0.113.7"})
+    other = client.post("/api/auth/login", json={"email": "admin@test.local", "password": PASSWORD},
+                        headers={"CF-Connecting-IP": "198.51.100.9"})
+    assert blocked.status_code == 429 and other.status_code == 200
+    # X-Forwarded-For (falseable por el cliente) no se usa cuando hay cabecera de IP configurada.
+    spoof = client.post("/api/auth/login", json={"email": "admin@test.local", "password": PASSWORD},
+                        headers={"CF-Connecting-IP": "203.0.113.7", "X-Forwarded-For": "1.2.3.4"})
+    assert spoof.status_code == 429
+
+
+def test_demo_mode_has_production_guards_but_allows_docs_flag():
+    base = {"database_url": "postgresql://x@y/z", "docs_enabled": None}
+    with pytest.raises(ValueError):
+        Settings(app_env="demo", jwt_secret="change-me-local-only-change-me-local-only", cookie_secure=True, **base)
+    with pytest.raises(ValueError):
+        Settings(app_env="demo", jwt_secret="s" * 40, cookie_secure=False, **base)
+    demo = Settings(app_env="demo", jwt_secret="s" * 40, cookie_secure=True, **base)
+    assert demo.is_exposed and not demo.is_production and demo.show_docs is False
+
+
+def test_cross_site_cookie_settings_are_honoured(client, world, monkeypatch):
+    monkeypatch.setattr(get_settings(), "cookie_samesite", "none")
+    monkeypatch.setattr(get_settings(), "cookie_secure", True)
+    r = client.post("/api/auth/login", json={"email": "admin@test.local", "password": PASSWORD})
+    cookie = r.headers["set-cookie"].lower()
+    assert "samesite=none" in cookie and "secure" in cookie and "httponly" in cookie

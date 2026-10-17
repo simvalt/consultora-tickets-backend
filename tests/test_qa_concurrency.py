@@ -82,7 +82,7 @@ def test_concurrent_refresh_with_same_token_rotates_once(world):
     def go(_):
         with TestClient(app) as c:
             c.cookies.set("refresh_token", cookie, path="/api/auth")
-            return c.post("/api/auth/refresh").status_code
+            return c.post("/api/auth/refresh", headers={"X-Requested-With": "XMLHttpRequest"}).status_code
 
     codes = parallel(6, go)
     assert codes.count(200) == 1 and codes.count(401) == 5
