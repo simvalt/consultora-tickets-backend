@@ -11,6 +11,9 @@ expected="$2"
 exec 7>"$TICKETS_STATE_DIR/automation.lock"
 flock -w 1800 7
 release="$(mktemp -d /home/simonvalt/tickets-demo/releases/build.XXXXXXXX)"
+# sudo conserva el cwd de Jenkins, que simonvalt no puede atravesar.
+# Buildx resuelve tambien el cwd real aunque Compose use --project-directory.
+cd "$release"
 for name in backend database; do
   git clone --depth 1 --branch main --single-branch \
     "https://github.com/simvalt/consultora-tickets-$name.git" "$release/consultora-tickets-$name"
