@@ -34,6 +34,7 @@ services:
     environment:
       TEST_DATABASE_URL: postgresql://tickets:tickets-ci-disposable@db:5432/tickets_test
       DATABASE_REPO_PATH: /workspace/consultora-tickets-database
+      TICKETS_TEST_FAILURE_MODE: ${TICKETS_TEST_FAILURE_MODE:-strict}
     volumes:
       - ${DATABASE_REPO_PATH:-../consultora-tickets-database}:/workspace/consultora-tickets-database:ro
     mem_limit: 1536m

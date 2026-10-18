@@ -9,4 +9,4 @@ COPY scripts ./scripts
 COPY pyproject.toml ./
 RUN useradd -r -u 1000 tester && chown -R tester /workspace
 USER tester
-CMD ["sh", "-ec", "ruff check . && pip-audit -r requirements.txt && pytest --junitxml=/tmp/backend-tests.xml"]
+CMD ["sh", "scripts/ci-checks.sh"]

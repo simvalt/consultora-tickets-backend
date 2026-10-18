@@ -22,6 +22,23 @@ actual="$(git -C "$release/consultora-tickets-$component" rev-parse HEAD)"
 [[ "$actual" == "$expected" ]] || { echo 'Main avanzo; ejecutar el build del commit mas reciente.'; exit 1; }
 backend="$release/consultora-tickets-backend"
 python3 "$backend/scripts/verify-existing-services.py" --record --snapshot "$release/before.json"
-bash "$backend/scripts/ci-server.sh"
+test_mode=strict
+[[ "$component" != backend ]] || test_mode=warn
+tests_failed=0
+if TICKETS_TEST_FAILURE_MODE="$test_mode" bash "$backend/scripts/ci-server.sh"; then
+  :
+else
+  ci_status=$?
+  if [[ "$test_mode" == warn && "$ci_status" == 42 ]]; then
+    tests_failed=1
+    echo 'ADVERTENCIA: hay pruebas fallidas; el despliegue de backend continua por configuracion del job.' >&2
+  else
+    exit "$ci_status"
+  fi
+fi
 bash "$backend/scripts/deploy-server.sh"
 python3 "$backend/scripts/verify-existing-services.py" --snapshot "$release/before.json"
+if [[ "$tests_failed" == 1 ]]; then
+  echo 'Tickets desplegado y saludable con advertencias de pruebas.' >&2
+  exit 42
+fi

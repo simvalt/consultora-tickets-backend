@@ -43,6 +43,10 @@ El primer build registra la consulta de cambios (`pollSCM`, aproximadamente cada
 
 Instalar `deploy/jenkins-run.sh` en `~/tickets-demo/automation/run.sh`, propietario `simonvalt`, modo 0700. Crear `~/tickets-demo/releases`. El punto de entrada solo acepta `backend|database` y un SHA hexadecimal completo. Serializa ambos jobs con `flock`, clona los repositorios en una carpeta nueva, verifica que el commit solicitado siga siendo `main`, ejecuta CI y despliega. Un cambio de migraciones vuelve a probar la API antes de aplicarse a la demo.
 
+Por decision del propietario, **Tickets-backend ejecuta las pruebas como informacion y sus fallos no impiden desplegar**. El runner usa `TICKETS_TEST_FAILURE_MODE=warn` exclusivamente para este job. Si pytest termina con pruebas fallidas (codigo 1), CI lo comunica con codigo 42; el runner continua el despliegue y, solo despues de verificar la API y los servicios anteriores, devuelve 42 para que Jenkins marque el build **UNSTABLE** con una advertencia. Los fallos de compilacion, lint, auditoria de dependencias, migraciones, ejecucion de pytest o salud de la API siguen deteniendo el job. Un timeout o una interrupcion tampoco se ignoran. No se cambian las reglas de Tickets-database, que conserva pruebas bloqueantes, ni las de otros jobs.
+
+`scripts/ci-server.sh` mantiene el modo estricto por defecto fuera de Tickets-backend. Al cambiar el runner hay que instalar tambien su version nueva en `automation/run.sh`; el Jenkinsfile no tiene permisos para actualizar ese archivo por si mismo.
+
 El usuario debe ejecutar una vez:
 
 ```sh

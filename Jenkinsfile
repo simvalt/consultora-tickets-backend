@@ -14,11 +14,18 @@ pipeline {
         }
         stage('Pruebas y despliegue aislado') {
             steps {
-                sh '''#!/usr/bin/env bash
+                script {
+                    def deployStatus = sh(returnStatus: true, script: '''#!/usr/bin/env bash
 set -Eeuo pipefail
 commit="$(git rev-parse HEAD)"
 sudo -n -u simonvalt /home/simonvalt/tickets-demo/automation/run.sh backend "$commit"
-'''
+''')
+                    if (deployStatus == 42) {
+                        unstable('Tickets desplegado correctamente; hay pruebas fallidas no bloqueantes. Revisar el registro.')
+                    } else if (deployStatus != 0) {
+                        error("No se completo el despliegue de Tickets (codigo ${deployStatus}).")
+                    }
+                }
             }
         }
     }
