@@ -91,7 +91,7 @@ Las pruebas usan un **PostgreSQL real**; el esquema se crea ejecutando las migra
 
 ```bash
 pip install -r requirements-dev.txt
-pytest                      # 311 pruebas (usa la base tickets_test; se crea sola)
+pytest                      # 312 pruebas (usa la base tickets_test; se crea sola)
 pip-audit -r requirements.txt       # vulnerabilidades conocidas en dependencias
 python scripts/qa_performance.py   # prueba de carga: 200 000 tickets en la base tickets_perf
 ruff check .                # lint

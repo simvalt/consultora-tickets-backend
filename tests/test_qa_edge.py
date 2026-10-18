@@ -221,3 +221,16 @@ def test_health_and_meta(client, world, login):
     assert client.get("/api/meta").status_code == 401
     meta = client.get("/api/meta", headers=login("agent1@test.local")).json()
     assert meta["transitions"]["cerrado"] == ["en_proceso"] and len(meta["categories"]) == 3
+
+
+def test_validation_messages_are_spanish_and_name_the_field(client, world, login):
+    h = login("admin@test.local")
+    r = client.post("/api/tickets", headers=h, json={"title": "   ab  ", "client_id": world["client"], "category_id": 1})
+    assert r.status_code == 422
+    assert r.json()["error"]["details"] == [{"field": "title", "message": "Título: debe tener al menos 3 caracteres"}]
+    r = client.get("/api/tickets/abc", headers=h)
+    assert r.json()["error"]["details"][0]["message"] == "Ticket: debe ser un número entero"
+    r = client.get("/api/tickets", headers=h, params={"q": "x" * 101})
+    assert r.json()["error"]["details"][0]["message"] == "Búsqueda: admite como máximo 100 caracteres"
+    r = client.post("/api/tickets", headers=h, json={"client_id": world["client"], "category_id": 1})
+    assert r.json()["error"]["details"][0]["message"] == "Título: es obligatorio"
