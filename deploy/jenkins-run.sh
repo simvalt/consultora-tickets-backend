@@ -1,44 +1,96 @@
 #!/usr/bin/env bash
-# Punto de entrada para Jenkins. Instalar como ~/tickets-demo/automation/run.sh.
-# Los jobs nunca reciben socket Docker, secretos de la demo ni sudo general.
+# Instalar como ~/tickets-demo/automation/run.sh. Solo recursos exclusivos de Tickets.
 set -Eeuo pipefail
 umask 077
 export PATH=/usr/local/bin:/usr/bin:/bin
 export TICKETS_STATE_DIR=/home/simonvalt/tickets-demo/state
-[[ $# == 2 && "$2" =~ ^[0-9a-f]{40}$ ]] || { echo 'Uso: run.sh backend|database COMMIT'; exit 2; }
+[[ $# == 2 || $# == 4 ]] && [[ "$2" =~ ^[0-9a-f]{40}$ ]] || {
+  echo 'Uso: run.sh backend|database COMMIT [FASE BUILD_NUMBER]' >&2; exit 2;
+}
 case "$1" in backend|database) component="$1" ;; *) exit 2 ;; esac
 expected="$2"
+slot="$TICKETS_STATE_DIR/backend-pipeline.state"
 exec 7>"$TICKETS_STATE_DIR/automation.lock"
 flock -w 1800 7
-release="$(mktemp -d /home/simonvalt/tickets-demo/releases/build.XXXXXXXX)"
-# sudo conserva el cwd de Jenkins, que simonvalt no puede atravesar.
-# Buildx resuelve tambien el cwd real aunque Compose use --project-directory.
-cd "$release"
-for name in backend database; do
-  git clone --depth 1 --branch main --single-branch \
-    "https://github.com/simvalt/consultora-tickets-$name.git" "$release/consultora-tickets-$name"
-done
-actual="$(git -C "$release/consultora-tickets-$component" rev-parse HEAD)"
-[[ "$actual" == "$expected" ]] || { echo 'Main avanzo; ejecutar el build del commit mas reciente.'; exit 1; }
-backend="$release/consultora-tickets-backend"
-python3 "$backend/scripts/verify-existing-services.py" --record --snapshot "$release/before.json"
-test_mode=strict
-[[ "$component" != backend ]] || test_mode=warn
-tests_failed=0
-if TICKETS_TEST_FAILURE_MODE="$test_mode" bash "$backend/scripts/ci-server.sh"; then
-  :
-else
-  ci_status=$?
-  if [[ "$test_mode" == warn && "$ci_status" == 42 ]]; then
-    tests_failed=1
-    echo 'ADVERTENCIA: hay pruebas fallidas; el despliegue de backend continua por configuracion del job.' >&2
+
+prepare_release() {
+  release="$(mktemp -d /home/simonvalt/tickets-demo/releases/build.XXXXXXXX)"
+  cd "$release"
+  for name in backend database; do
+    git clone --depth 1 --branch main --single-branch \
+      "https://github.com/simvalt/consultora-tickets-$name.git" "$release/consultora-tickets-$name"
+  done
+  actual="$(git -C "$release/consultora-tickets-$component" rev-parse HEAD)"
+  [[ "$actual" == "$expected" ]] || { echo 'Main avanzo; ejecutar el commit mas reciente.' >&2; exit 1; }
+  backend="$release/consultora-tickets-backend"
+  python3 "$backend/scripts/verify-existing-services.py" --record --snapshot "$release/before.json"
+}
+
+if [[ $# == 2 ]]; then
+  # Database sigue siendo estricto. No intercalar versiones con el pipeline backend.
+  [[ ! -e "$slot" ]] || { echo 'Hay un pipeline backend activo de Tickets.' >&2; exit 1; }
+  prepare_release
+  if [[ "$component" == database ]]; then
+    TICKETS_TEST_FAILURE_MODE=strict bash "$backend/scripts/ci-server.sh"
   else
-    exit "$ci_status"
+    trap 'bash "$backend/scripts/ci-backend.sh" cleanup' EXIT
+    for phase in prepare lint audit; do bash "$backend/scripts/ci-backend.sh" "$phase"; done
   fi
+  bash "$backend/scripts/deploy-server.sh"
+  python3 "$backend/scripts/verify-existing-services.py" --snapshot "$release/before.json"
+  exit 0
 fi
-bash "$backend/scripts/deploy-server.sh"
-python3 "$backend/scripts/verify-existing-services.py" --snapshot "$release/before.json"
-if [[ "$tests_failed" == 1 ]]; then
-  echo 'Tickets desplegado y saludable con advertencias de pruebas.' >&2
-  exit 42
+
+[[ "$component" == backend && "$4" =~ ^[1-9][0-9]*$ ]] || exit 2
+phase="$3"
+build="$4"
+case "$phase" in prepare|lint|audit|build|backup|migrate|deploy|health|verify|finish) ;; *) exit 2 ;; esac
+save_slot() {
+  printf '%s\n' "$build" "$expected" "$release" "$1" > "$slot.tmp"
+  mv -- "$slot.tmp" "$slot"
+}
+if [[ "$phase" == prepare ]]; then
+  [[ ! -e "$slot" ]] || { echo 'Otro pipeline backend conserva la reserva de Tickets.' >&2; exit 1; }
+  prepare_release
+  # La reserva persiste entre stages; flock serializa cada operacion.
+  save_slot starting
+  bash "$backend/scripts/ci-backend.sh" prepare
+  save_slot prepare
+  exit 0
 fi
+
+if [[ ! -e "$slot" && "$phase" == finish ]]; then exit 0; fi
+[[ -f "$slot" ]] || { echo 'No hay una release preparada por este build.' >&2; exit 1; }
+mapfile -t active < "$slot"
+[[ ${#active[@]} == 4 && "${active[0]}" == "$build" && "${active[1]}" == "$expected" ]] || {
+  echo 'La reserva pertenece a otro build; no se modifica.' >&2; exit 1;
+}
+release="${active[2]}"
+[[ "$release" =~ ^/home/simonvalt/tickets-demo/releases/build\.[A-Za-z0-9]+$ && -d "$release" ]] || exit 1
+backend="$release/consultora-tickets-backend"
+cd "$release"
+export TICKETS_PIPELINE_RELEASE="$release"
+if [[ "$phase" == finish ]]; then
+  status=0
+  python3 "$backend/scripts/verify-existing-services.py" --snapshot "$release/before.json" || status=$?
+  bash "$backend/scripts/ci-backend.sh" cleanup || status=$?
+  rm -- "$slot"
+  exit "$status"
+fi
+case "$phase" in
+  lint) previous=prepare ;;
+  audit) previous=lint ;;
+  build) previous=audit ;;
+  backup) previous=build ;;
+  migrate) previous=backup ;;
+  deploy) previous=migrate ;;
+  health) previous=deploy ;;
+  verify) previous=health ;;
+esac
+[[ "${active[3]}" == "$previous" ]] || { echo "Orden invalido: $phase requiere $previous." >&2; exit 1; }
+case "$phase" in
+  lint|audit) bash "$backend/scripts/ci-backend.sh" "$phase" ;;
+  build|backup|migrate|deploy|health) bash "$backend/scripts/deploy-server.sh" "$phase" ;;
+  verify) python3 "$backend/scripts/verify-existing-services.py" --snapshot "$release/before.json" ;;
+esac
+save_slot "$phase"

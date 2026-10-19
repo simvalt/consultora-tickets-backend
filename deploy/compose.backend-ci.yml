@@ -1,0 +1,16 @@
+# Validaciones estaticas del backend. Sin pytest, BD, secretos o redes de la demo.
+name: consultora-tickets-backend-ci
+services:
+  quality:
+    image: consultora-tickets-quality:${BACKEND_REF:?required}
+    build:
+      context: .
+      dockerfile: deploy/quality.Dockerfile
+    mem_limit: 768m
+    cpus: 1.0
+    pids_limit: 150
+    read_only: true
+    # pip-audit ejecuta su entorno temporal al resolver dependencias.
+    tmpfs: ["/tmp:size=128m,mode=1777,exec"]
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]

@@ -10,7 +10,8 @@
 |---|---|
 | Directorio nuevo | `/home/simonvalt/tickets-demo` |
 | API + PostgreSQL | proyecto Compose `consultora-tickets-demo` |
-| Pruebas efimeras | proyecto Compose `consultora-tickets-ci` |
+| Pruebas efimeras de database | proyecto Compose `consultora-tickets-ci` |
+| Validaciones estaticas de backend | proyecto Compose `consultora-tickets-backend-ci` |
 | Redes de la demo | `consultora-tickets-demo_data` (interna), `consultora-tickets-demo_edge` |
 | Datos | volumen `consultora-tickets-demo_pgdata` |
 | Secretos | `state/runtime.env` (0600, generado en el servidor, fuera de Git) |
@@ -41,11 +42,17 @@ El primer build registra la consulta de cambios (`pollSCM`, aproximadamente cada
 
 ### API y migraciones
 
-Instalar `deploy/jenkins-run.sh` en `~/tickets-demo/automation/run.sh`, propietario `simonvalt`, modo 0700. Crear `~/tickets-demo/releases`. El punto de entrada solo acepta `backend|database` y un SHA hexadecimal completo. Serializa ambos jobs con `flock`, clona los repositorios en una carpeta nueva, verifica que el commit solicitado siga siendo `main`, ejecuta CI y despliega. Un cambio de migraciones vuelve a probar la API antes de aplicarse a la demo.
+Instalar `deploy/jenkins-run.sh` en `~/tickets-demo/automation/run.sh`, propietario `simonvalt`, modo 0700. Crear `~/tickets-demo/releases`. Conserva la interfaz `database COMMIT` del job existente y agrega `backend COMMIT FASE BUILD_NUMBER` para el backend.
 
-Por decision del propietario, **Tickets-backend ejecuta las pruebas como informacion y sus fallos no impiden desplegar**. El runner usa `TICKETS_TEST_FAILURE_MODE=warn` exclusivamente para este job. Si pytest termina con pruebas fallidas (codigo 1), CI lo comunica con codigo 42; el runner continua el despliegue y, solo despues de verificar la API y los servicios anteriores, devuelve 42 para que Jenkins marque el build **UNSTABLE** con una advertencia. Los fallos de compilacion, lint, auditoria de dependencias, migraciones, ejecucion de pytest o salud de la API siguen deteniendo el job. Un timeout o una interrupcion tampoco se ignoran. No se cambian las reglas de Tickets-database, que conserva pruebas bloqueantes, ni las de otros jobs.
+**Tickets-backend no ejecuta pruebas ni instala pytest en su imagen de validaciones.** Sus etapas visibles son: checkout, preparar release, lint, auditar dependencias, construir imagenes, respaldar PostgreSQL, aplicar migraciones, desplegar API, verificar salud y verificar aislamiento. Un build correcto termina SUCCESS; se elimina la conversion de pruebas fallidas a UNSTABLE. Lint, auditoria, construccion, respaldo, migraciones y salud permanecen bloqueantes.
 
-`scripts/ci-server.sh` mantiene el modo estricto por defecto fuera de Tickets-backend. Al cambiar el runner hay que instalar tambien su version nueva en `automation/run.sh`; el Jenkinsfile no tiene permisos para actualizar ese archivo por si mismo.
+El backend usa `scripts/ci-backend.sh`, `deploy/quality.Dockerfile` y el proyecto independiente `consultora-tickets-backend-ci`, sin BD efimera ni pytest. `requirements-ci.txt` contiene las herramientas estaticas y es compartido por `requirements-dev.txt`; las dependencias de pruebas siguen disponibles para desarrollo.
+
+Una release fija conserva los mismos commits entre todas las fases. `flock` serializa cada operacion y `state/backend-pipeline.state` reserva la release para su SHA/build, bloquea intercalaciones con database y exige el orden de las etapas. `post/always` verifica servicios ajenos, limpia exclusivamente el proyecto de validacion backend y libera la reserva, incluso si una etapa falla. Las releases y respaldos se conservan. Si el agente desaparece y no ejecuta post/always, no se elimina la reserva automaticamente: primero comprobar que ese build ya no esta activo y recuperar exclusivamente el estado de Tickets. No borrar bloqueos mientras haya una ejecucion en curso.
+
+**Tickets-database conserva sus pruebas bloqueantes** con `TICKETS_TEST_FAILURE_MODE=strict` y `scripts/ci-server.sh`; su Jenkinsfile no cambia. Un cambio de migraciones sigue verificando compatibilidad antes de aplicarse a la demo. Las validaciones manuales del backend tampoco se eliminan.
+
+Al cambiar el runner hay que instalar su nueva version en `automation/run.sh` antes de publicar el Jenkinsfile. El job no actualiza ese archivo y no se requieren cambios en sudoers, plugins, nodos o configuracion global. El runner rechaza acciones desconocidas, fases fuera de orden y fases de otro build. El despliegue manual de Tickets se rechaza mientras exista una reserva de pipeline activa.
 
 El usuario debe ejecutar una vez:
 
