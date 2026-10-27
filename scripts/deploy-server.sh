@@ -64,5 +64,3 @@ case "$phase" in
   deploy) deploy_api ;;
   health) verify_health ;;
 esac
-
-
